@@ -117,8 +117,9 @@ describe('patterns scope filter', () => {
     expect(patternsSrc).toContain('ORDER BY updated_at DESC');
   });
 
-  test('caps gather to 100 reflections (cost control)', () => {
-    expect(patternsSrc).toContain('LIMIT 100');
+  test('caps gather through the configured query limit', () => {
+    expect(patternsSrc).toContain('LIMIT $3');
+    expect(patternsSrc).toContain('dream.patterns.max_reflections');
   });
 
   test('output slug prefix is config-driven, defaulting to <output_root>/personal/patterns', () => {
@@ -137,5 +138,75 @@ describe('patterns scope filter', () => {
     // must add it explicitly so put_page actually grants write access there.
     expect(patternsSrc).toContain('outputGlob');
     expect(patternsSrc).toContain('allowedSlugPrefixes.push(outputGlob)');
+  });
+});
+
+describe('patterns cost and evidence bounds', () => {
+  test('optional cost cap is strict while off preserves legacy behavior', async () => {
+    const values = new Map<string, string>();
+    const fake = {
+      async getConfig(key: string) { return values.get(key) ?? null; },
+    } as unknown as BrainEngine;
+
+    expect(await __testing.getOptionalCostConfig(fake, 'dream.patterns.budget_usd')).toBeUndefined();
+    values.set('dream.patterns.budget_usd', 'off');
+    expect(await __testing.getOptionalCostConfig(fake, 'dream.patterns.budget_usd')).toBeUndefined();
+    values.set('dream.patterns.budget_usd', '0.25');
+    expect(await __testing.getOptionalCostConfig(fake, 'dream.patterns.budget_usd')).toBe(0.25);
+    values.set('dream.patterns.budget_usd', 'nonsense');
+    await expect(__testing.getOptionalCostConfig(fake, 'dream.patterns.budget_usd')).rejects.toThrow(/finite positive USD/);
+  });
+
+  test('reflection query honors a bounded input count', async () => {
+    const calls: unknown[][] = [];
+    const fake = {
+      async executeRaw(_sql: string, params: unknown[]) {
+        calls.push(params);
+        return [];
+      },
+    } as unknown as BrainEngine;
+
+    await __testing.gatherReflections(fake, 30, 'wiki/personal/reflections', 24);
+    expect(calls[0]?.[2]).toBe(96);
+  });
+
+  test('copied observations do not satisfy recurrence', async () => {
+    const fake = {
+      async executeRaw() {
+        return [
+          { slug: 'reflections/a', title: 'A', compiled_truth: 'Same claim', source_id: 'one', observed_date: '2026-08-01' },
+          { slug: 'reflections/b', title: 'B', compiled_truth: ' same   claim ', source_id: 'two', observed_date: '2026-08-02' },
+          { slug: 'reflections/c', title: 'C', compiled_truth: 'SAME CLAIM', source_id: 'three', observed_date: '2026-08-03' },
+        ];
+      },
+    } as unknown as BrainEngine;
+    const rows = await __testing.gatherReflections(fake, 30, 'reflections', 24);
+    expect(rows).toHaveLength(1);
+  });
+
+  test('longitudinal evidence spans sources or date buckets', () => {
+    const base = [
+      { slug: 'r/a', title: 'A', excerpt: 'one', sourceId: 'josh', observedDate: '2026-08-01' },
+      { slug: 'r/b', title: 'B', excerpt: 'two', sourceId: 'josh', observedDate: '2026-08-08' },
+      { slug: 'r/c', title: 'C', excerpt: 'counterexample', sourceId: 'josh', observedDate: '2026-08-08' },
+    ];
+    expect(__testing.summarizeEvidenceSpan(base)).toEqual({
+      distinctSources: 1,
+      distinctDateBuckets: 2,
+    });
+  });
+
+  test('prompt requires provisional evidence and counterevidence', () => {
+    const prompt = __testing.buildPatternsPrompt([
+      { slug: 'wiki/personal/reflections/a', title: 'A', excerpt: 'Example A', sourceId: 'one', observedDate: '2026-08-01' },
+      { slug: 'wiki/personal/reflections/b', title: 'B', excerpt: 'Example B', sourceId: 'one', observedDate: '2026-08-08' },
+      { slug: 'wiki/personal/reflections/c', title: 'C', excerpt: 'Example C', sourceId: 'one', observedDate: '2026-08-08' },
+    ], 3, 'wiki/personal/reflections', 'wiki/personal/patterns', 3);
+    expect(prompt).toContain('no more than 3 provisional pattern pages');
+    expect(prompt).toContain('Treat every result as provisional');
+    expect(prompt).toContain('counterevidence');
+    expect(prompt).toContain('Copied or replayed observations do not increase');
+    expect(prompt).toContain('observed date: 2026-08-01');
+    expect(prompt).toContain('what remains unknown');
   });
 });

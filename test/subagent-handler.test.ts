@@ -23,6 +23,7 @@ import {
 } from '../src/core/minions/handlers/subagent.ts';
 import type { ToolDef, MinionJobContext } from '../src/core/minions/types.ts';
 import type Anthropic from '@anthropic-ai/sdk';
+import { __setChatTransportForTests } from '../src/core/ai/gateway.ts';
 
 let engine: PGLiteEngine;
 let queue: MinionQueue;
@@ -545,6 +546,31 @@ describe('subagent handler input validation', () => {
     const ctx = await makeCtx({ prompt: 'x', allowed_tools: ['real', 'ghost_tool'] });
     await expect(handler(ctx)).rejects.toThrow(/unknown tool/);
   });
+
+  test('invalid per-job cost cap fails before a provider call', async () => {
+    const client = new FakeMessagesClient([
+      { content: [{ type: 'text', text: 'must not run' }] as any, stop_reason: 'end_turn' },
+    ]);
+    const handler = makeSubagentHandler({ engine, client, toolRegistry: [] });
+    const ctx = await makeCtx({ prompt: 'x', max_cost_usd: 0 });
+    await expect(handler(ctx)).rejects.toThrow(/finite positive number/);
+    expect(client.calls).toHaveLength(0);
+  });
+
+  test('a capped job refuses the legacy direct loop before a provider call', async () => {
+    await engine.setConfig('agent.use_gateway_loop', 'false');
+    const client = new FakeMessagesClient([
+      { content: [{ type: 'text', text: 'must not run' }] as any, stop_reason: 'end_turn' },
+    ]);
+    const handler = makeSubagentHandler({ engine, client, toolRegistry: [] });
+    const ctx = await makeCtx({
+      prompt: 'x',
+      model: 'anthropic:claude-sonnet-4-6',
+      max_cost_usd: 0.25,
+    });
+    await expect(handler(ctx)).rejects.toThrow(/requires agent\.use_gateway_loop=true/);
+    expect(client.calls).toHaveLength(0);
+  });
 });
 
 describe('makeSubagentHandler default client construction', () => {
@@ -986,6 +1012,34 @@ describe('oneshot mode dispatch (#4216)', () => {
     expect(result.pages_failed).toBe(0);
     expect(client.calls.length).toBe(0);
     expect(await engine.getPage(SLUG_A)).not.toBeNull();
+  });
+
+  test('per-job cost cap physically denies the oneshot before provider transport', async () => {
+    await engine.setConfig('agent.use_gateway_loop', 'true');
+    let providerCalls = 0;
+    __setChatTransportForTests(async () => {
+      providerCalls += 1;
+      return chatStub(VALID)();
+    });
+    try {
+      const client = new FakeMessagesClient([]);
+      const handler = makeSubagentHandler({ engine, client });
+      const ctx = await makeCtx({
+        prompt: 'synthesize',
+        mode: 'oneshot',
+        require_writes: true,
+        model: 'openai:gpt-5.6-terra',
+        max_cost_usd: 0.000001,
+        allowed_slug_prefixes: PREFIXES,
+        oneshot_slug_suffix: SUFFIX,
+      });
+      await expect(handler(ctx)).rejects.toThrow(/exceeds --max-cost/);
+      expect(providerCalls).toBe(0);
+      expect(client.calls).toHaveLength(0);
+    } finally {
+      __setChatTransportForTests(null);
+      await engine.unsetConfig('agent.use_gateway_loop');
+    }
   });
 
   test('invalid oneshot output falls back to the agentic loop IN THE SAME JOB', async () => {

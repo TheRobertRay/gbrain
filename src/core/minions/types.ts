@@ -509,6 +509,14 @@ export interface SubagentHandlerData {
    */
   max_tokens?: number;
   /**
+   * Optional hard USD ceiling for every gateway-routed model call made by
+   * this job, including a oneshot attempt plus any agentic fallback. When
+   * set, unpriced models fail closed before the provider call. The legacy
+   * Anthropic-direct loop is refused because it bypasses the shared gateway
+   * BudgetTracker boundary.
+   */
+  max_cost_usd?: number;
+  /**
    * Whitelist of tool names the agent may call. MUST be a subset of the
    * derived registry names — invalid entries are rejected at tool-dispatch
    * time, not silently ignored. Empty array = no tools.

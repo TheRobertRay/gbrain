@@ -56,6 +56,7 @@ import { toolLoop as gatewayToolLoop, isThinkingByDefaultModel, THINKING_MODEL_M
 import type { ChatToolDef, ChatMessage, ChatBlock, ChatResult, ToolHandler } from '../../ai/gateway.ts';
 import { classifyCapabilities } from '../../ai/capabilities.ts';
 import { runSubagentOneshot, ONESHOT_TOOL_USE_ID_PREFIX } from './subagent-oneshot.ts';
+import { assertCappedSubagentUsesGateway, withSubagentJobBudget } from './subagent-budget.ts';
 import type { OneshotFallbackReason } from '../types.ts';
 import {
   loadPriorMessages,
@@ -241,7 +242,6 @@ export function makeSubagentHandler(deps: SubagentDeps) {
   const rateLeaseKey = deps.rateLeaseKey ?? DEFAULT_RATE_KEY;
   const maxConcurrent = deps.maxConcurrent ?? DEFAULT_MAX_CONCURRENT;
   const leaseTtlMs = deps.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
-
   return async function subagentHandler(ctx: MinionJobContext): Promise<SubagentResult> {
     const dataForAccounting = (ctx.data ?? {}) as unknown as SubagentHandlerData;
     // #4217: every subagent job gets structural write accounting merged into
@@ -252,7 +252,7 @@ export function makeSubagentHandler(deps: SubagentDeps) {
       fallbackReason?: OneshotFallbackReason;
       oneshotTokens?: { in: number; out: number; cache_read: number; cache_create: number };
     } = {};
-    const inner = await subagentHandlerInner(ctx, modeState);
+    const inner = await withSubagentJobBudget(engine, ctx.id, dataForAccounting, () => subagentHandlerInner(ctx, modeState));
     // #4216: stamp which execution path produced the result. Jobs with no
     // `mode` field keep the legacy result shape (REGRESSION pin).
     // Honesty rule: 'agentic_fallback' is stamped ONLY when the oneshot
@@ -408,7 +408,6 @@ export function makeSubagentHandler(deps: SubagentDeps) {
     // listing each available tool's usage_hint. The renderer is
     // deterministic so the Anthropic prompt-cache marker on the system
     // block stays a hit across turns.
-
     // v0.38 S1.10 — feature flag for the gateway-native tool loop. When ON,
     // route ALL subagent jobs through gateway.toolLoop() (works for every
     // provider in src/core/ai/recipes/). When OFF, route through the legacy
@@ -418,6 +417,7 @@ export function makeSubagentHandler(deps: SubagentDeps) {
     // yes/on but the worker did not, so `config set ... yes` reported healthy
     // here and still refused the job below.
     const useGatewayLoop = isConfigTruthy(useGatewayLoopRaw);
+    assertCappedSubagentUsesGateway(data, useGatewayLoop);
     if (!useGatewayLoop && !isAnthropicProvider(model)) {
       throw new Error(
         `subagent job: resolved model "${model}" is non-Anthropic but agent.use_gateway_loop is not enabled. ` +

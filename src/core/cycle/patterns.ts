@@ -139,11 +139,20 @@ export async function runPhasePatterns(
     }
 
     // Gather reflections within lookback window.
-    const reflections = await gatherReflections(engine, config.lookbackDays, config.sourceSlugPrefix);
+    const reflections = await gatherReflections(
+      engine, config.lookbackDays, config.sourceSlugPrefix, config.maxReflections,
+    );
     if (reflections.length < config.minEvidence) {
       return skipped(
         'insufficient_evidence',
         `${reflections.length} reflections in last ${config.lookbackDays}d (need ≥${config.minEvidence})`,
+      );
+    }
+    const evidenceSpan = summarizeEvidenceSpan(reflections);
+    if (evidenceSpan.distinctSources < 2 && evidenceSpan.distinctDateBuckets < 2) {
+      return skipped(
+        'insufficient_longitudinal_evidence',
+        `${reflections.length} distinct reflections span only one source and one date bucket`,
       );
     }
 
@@ -216,9 +225,16 @@ export async function runPhasePatterns(
       childQueueName, privateQueueOwnerToken, opts.yieldDuringPhase,
     );
     const data: SubagentHandlerData = {
-      prompt: buildPatternsPrompt(reflections, config.minEvidence, config.sourceSlugPrefix, config.outputSlugPrefix),
+      prompt: buildPatternsPrompt(
+        reflections,
+        config.minEvidence,
+        config.sourceSlugPrefix,
+        config.outputSlugPrefix,
+        config.requestedMaxPatterns,
+      ),
       model: config.model,
       max_turns: 30,
+      ...(config.budgetUsd === undefined ? {} : { max_cost_usd: config.budgetUsd }),
       // #4217/CDX-12: a patterns child whose every put_page failed must
       // dead-letter (its whole purpose is writing pattern pages), not report
       // completed with zero pages.
@@ -298,6 +314,10 @@ export async function runPhasePatterns(
 
     const details = {
       reflections_considered: reflections.length,
+      distinct_sources: evidenceSpan.distinctSources,
+      distinct_date_buckets: evidenceSpan.distinctDateBuckets,
+      requested_max_patterns: config.requestedMaxPatterns,
+      budget_usd: config.budgetUsd ?? null,
       patterns_written: writtenRefs.length,
       reverse_write_count: reverseWriteCount,
       child_outcome: outcome,
@@ -369,6 +389,9 @@ interface PatternsConfig {
   enabled: boolean;
   lookbackDays: number;
   minEvidence: number;
+  maxReflections: number;
+  requestedMaxPatterns: number;
+  budgetUsd?: number;
   model: string;
   /** #2415: shared output namespace (dream.synthesize.output_root, default 'wiki'). */
   outputRoot: string;
@@ -411,6 +434,17 @@ async function getSlugPrefixConfig(engine: BrainEngine, key: string, fallback: s
   return trimmed || fallback;
 }
 
+async function getOptionalCostConfig(engine: BrainEngine, key: string): Promise<number | undefined> {
+  const raw = await engine.getConfig(key);
+  if (raw === null || raw === undefined || raw.trim() === '') return undefined;
+  if (['off', 'unlimited', 'none'].includes(raw.trim().toLowerCase())) return undefined;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`${key} must be a finite positive USD amount or off`);
+  }
+  return value;
+}
+
 async function loadPatternsConfig(engine: BrainEngine): Promise<PatternsConfig> {
   const enabledStr = await engine.getConfig('dream.patterns.enabled');
   const enabled = enabledStr === null ? true : enabledStr === 'true';
@@ -429,6 +463,15 @@ async function loadPatternsConfig(engine: BrainEngine): Promise<PatternsConfig> 
     enabled,
     lookbackDays: lookbackStr ? Math.max(1, parseInt(lookbackStr, 10) || 30) : 30,
     minEvidence: minEvidenceStr ? Math.max(1, parseInt(minEvidenceStr, 10) || 3) : 3,
+    maxReflections: Math.min(100, Math.max(
+      1,
+      Math.floor(await getNumberConfig(engine, 'dream.patterns.max_reflections', 100)),
+    )),
+    requestedMaxPatterns: Math.min(12, Math.max(
+      1,
+      Math.floor(await getNumberConfig(engine, 'dream.patterns.requested_max_patterns', 3)),
+    )),
+    budgetUsd: await getOptionalCostConfig(engine, 'dream.patterns.budget_usd'),
     model,
     outputRoot,
     sourceSlugPrefix: await getSlugPrefixConfig(
@@ -452,34 +495,70 @@ interface ReflectionRef {
   slug: string;
   title: string;
   excerpt: string;
+  sourceId: string;
+  observedDate: string;
+}
+
+function normalizeEvidenceText(value: string): string {
+  return value.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function summarizeEvidenceSpan(reflections: ReflectionRef[]): {
+  distinctSources: number;
+  distinctDateBuckets: number;
+} {
+  return {
+    distinctSources: new Set(reflections.map((row) => row.sourceId)).size,
+    distinctDateBuckets: new Set(reflections.map((row) => row.observedDate)).size,
+  };
 }
 
 async function gatherReflections(
   engine: BrainEngine,
   lookbackDays: number,
   sourceSlugPrefix = 'wiki/personal/reflections',
+  maxReflections = 100,
 ): Promise<ReflectionRef[]> {
   const since = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000).toISOString();
   // Reflections live under the configured source slug prefix (bound as a
   // parameter; see PatternsConfig.sourceSlugPrefix / dream.patterns.source_slug_prefix).
-  const rows = await engine.executeRaw<{ slug: string; title: string | null; compiled_truth: string | null }>(
-    `SELECT slug, title, compiled_truth
+  const queryLimit = Math.min(100, maxReflections * 4);
+  const rows = await engine.executeRaw<{
+    slug: string;
+    title: string | null;
+    compiled_truth: string | null;
+    source_id: string;
+    observed_date: string;
+  }>(
+    `SELECT slug, title, compiled_truth, source_id,
+            updated_at::date::text AS observed_date
        FROM pages
       WHERE slug LIKE $2
         AND updated_at >= $1::timestamptz
       ORDER BY updated_at DESC
-      LIMIT 100`,
-    [since, `${sourceSlugPrefix}/%`],
+      LIMIT $3`,
+    [since, `${sourceSlugPrefix}/%`, queryLimit],
   );
-  return rows.map(r => ({
-    slug: r.slug,
-    title: r.title ?? r.slug,
-    // A raw UTF-16 slice can split an astral character at the boundary and
-    // leave a lone surrogate. Postgres rejects that when the prompt is bound
-    // into the minion job's JSONB payload. Use the shared safe truncator so a
-    // reflection containing emoji cannot abort the entire patterns phase.
-    excerpt: truncateUtf8(r.compiled_truth ?? '', 600),
-  }));
+  const seenEvidence = new Set<string>();
+  const reflections: ReflectionRef[] = [];
+  for (const row of rows) {
+    const normalized = normalizeEvidenceText(row.compiled_truth ?? '');
+    if (!normalized || seenEvidence.has(normalized)) continue;
+    seenEvidence.add(normalized);
+    reflections.push({
+      slug: row.slug,
+      title: row.title ?? row.slug,
+      // A raw UTF-16 slice can split an astral character at the boundary and
+      // leave a lone surrogate. Postgres rejects that when the prompt is bound
+      // into the minion job's JSONB payload. Use the shared safe truncator so a
+      // reflection containing emoji cannot abort the entire patterns phase.
+      excerpt: truncateUtf8(row.compiled_truth ?? '', 600),
+      sourceId: row.source_id,
+      observedDate: row.observed_date,
+    });
+    if (reflections.length >= maxReflections) break;
+  }
+  return reflections;
 }
 
 // ── Prompt ────────────────────────────────────────────────────────────
@@ -489,17 +568,24 @@ function buildPatternsPrompt(
   minEvidence: number,
   sourceSlugPrefix = 'wiki/personal/reflections',
   outputSlugPrefix = 'wiki/personal/patterns',
+  maxPatterns = 3,
 ): string {
   const today = new Date().toISOString().slice(0, 10);
   const corpus = reflections
-    .map((r, i) => `### ${i + 1}. [[${r.slug}]] — ${r.title}\n${r.excerpt}`)
+    .map((r, i) =>
+      `### ${i + 1}. [[${r.slug}]] — ${r.title}\n` +
+      `Source: ${r.sourceId}; observed date: ${r.observedDate}\n${r.excerpt}`
+    )
     .join('\n\n---\n\n');
 
   return `You are surfacing recurring themes across the user's recent reflections.
 
 OUTPUT POLICY
-- Only name a pattern if it appears in at least ${minEvidence} DISTINCT reflections.
+- Write no more than ${maxPatterns} provisional pattern pages in this run.
+- Only name a pattern if it appears in at least ${minEvidence} DISTINCT reflections spanning at least two source identities, sessions, or date buckets.
+- Search explicitly for counterevidence before writing. Copied or replayed observations do not increase the recurrence count.
 - Each pattern page MUST cite the reflections that constitute its evidence (use [[${sourceSlugPrefix}/...]] wikilinks).
+- Treat every result as provisional: include supporting evidence, counterevidence, the last-supported date, confidence basis, and what remains unknown.
 - Use \`search\` to check whether a similar pattern page already exists; if yes, update it (use the same slug). If no, create a new one.
 - Pattern slug format: \`${outputSlugPrefix}/<topic-slug>\` (lowercase alphanumeric + hyphens; no underscores, no extension, no date).
 - A "pattern" is a recurring theme, anxiety, decision pattern, relationship dynamic, or self-knowledge motif. NOT a single insight. NOT a list of unrelated topics.
@@ -636,7 +722,11 @@ function makeError(cls: string, code: string, message: string, hint?: string): P
 // source-scoping contract (#1586) without driving a whole dream cycle.
 // Mirrors synthesize.ts's `__testing` block.
 export const __testing = {
+  loadPatternsConfig,
+  getOptionalCostConfig,
   gatherReflections,
+  summarizeEvidenceSpan,
+  buildPatternsPrompt,
   collectChildPutPageSlugs,
   reverseWriteRefs,
 };
