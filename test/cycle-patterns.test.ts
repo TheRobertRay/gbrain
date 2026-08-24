@@ -113,8 +113,10 @@ describe('patterns scope filter', () => {
     expect(patternsSrc).toContain('dream.patterns.source_slug_prefix');
   });
 
-  test('orders by updated_at DESC for recency-bias', () => {
-    expect(patternsSrc).toContain('ORDER BY updated_at DESC');
+  test('uses effective evidence time for lookback and recency', () => {
+    expect(patternsSrc).toContain('COALESCE(effective_date, updated_at) >= $1::timestamptz');
+    expect(patternsSrc).toContain('ORDER BY COALESCE(effective_date, updated_at) DESC, updated_at DESC');
+    expect(patternsSrc).toContain('COALESCE(effective_date, updated_at)::date::text AS observed_date');
   });
 
   test('caps gather through the configured query limit', () => {

@@ -535,11 +535,11 @@ async function gatherReflections(
     observed_date: string;
   }>(
     `SELECT slug, title, compiled_truth, source_id,
-            updated_at::date::text AS observed_date
+            COALESCE(effective_date, updated_at)::date::text AS observed_date
        FROM pages
       WHERE slug LIKE $2
-        AND updated_at >= $1::timestamptz
-      ORDER BY updated_at DESC
+        AND COALESCE(effective_date, updated_at) >= $1::timestamptz
+      ORDER BY COALESCE(effective_date, updated_at) DESC, updated_at DESC
       LIMIT $3`,
     [since, `${sourceSlugPrefix}/%`, queryLimit],
   );
