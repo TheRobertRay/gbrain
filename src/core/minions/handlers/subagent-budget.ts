@@ -2,8 +2,9 @@
 
 import type { BrainEngine } from '../../engine.ts';
 import type { SubagentHandlerData } from '../types.ts';
+import { UnrecoverableError } from '../types.ts';
 import { withBudgetTracker } from '../../ai/gateway.ts';
-import { BudgetTracker, loadPricingOverrides } from '../../budget/budget-tracker.ts';
+import { BudgetExhausted, BudgetTracker, loadPricingOverrides } from '../../budget/budget-tracker.ts';
 
 export async function withSubagentJobBudget<T>(
   engine: BrainEngine,
@@ -22,7 +23,19 @@ export async function withSubagentJobBudget<T>(
     label: `subagent.job:${jobId}`,
     pricingOverrides: await loadPricingOverrides(engine),
   });
-  return withBudgetTracker(tracker, run);
+  try {
+    return await withBudgetTracker(tracker, run);
+  } catch (error) {
+    // The cap belongs to the JOB, not to each queue attempt. Retrying a
+    // BudgetExhausted job would construct a fresh tracker and multiply the
+    // operator's stated ceiling by max_attempts. Budget exhaustion is a
+    // deterministic terminal outcome for this payload, so route it through
+    // the queue's fail-closed path on the first attempt.
+    if (error instanceof BudgetExhausted) {
+      throw new UnrecoverableError(error.message);
+    }
+    throw error;
+  }
 }
 
 export function assertCappedSubagentUsesGateway(

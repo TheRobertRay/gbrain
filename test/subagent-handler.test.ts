@@ -21,7 +21,7 @@ import {
   stripProviderPrefix,
   type MessagesClient,
 } from '../src/core/minions/handlers/subagent.ts';
-import type { ToolDef, MinionJobContext } from '../src/core/minions/types.ts';
+import { UnrecoverableError, type ToolDef, type MinionJobContext } from '../src/core/minions/types.ts';
 import type Anthropic from '@anthropic-ai/sdk';
 import { __setChatTransportForTests } from '../src/core/ai/gateway.ts';
 
@@ -1033,7 +1033,9 @@ describe('oneshot mode dispatch (#4216)', () => {
         allowed_slug_prefixes: PREFIXES,
         oneshot_slug_suffix: SUFFIX,
       });
-      await expect(handler(ctx)).rejects.toThrow(/exceeds --max-cost/);
+      const rejection = handler(ctx);
+      await expect(rejection).rejects.toBeInstanceOf(UnrecoverableError);
+      await expect(rejection).rejects.toThrow(/exceeds --max-cost/);
       expect(providerCalls).toBe(0);
       expect(client.calls).toHaveLength(0);
     } finally {
