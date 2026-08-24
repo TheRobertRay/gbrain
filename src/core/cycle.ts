@@ -2434,8 +2434,6 @@ export async function runCycle(
           summary: 'no database connected',
           details: { reason: 'no_database' },
         });
-      } else if (brainDir === null) {
-        phaseResults.push(skipNoBrainDir('patterns'));
       } else {
         progress.start('cycle.patterns');
         const { runPhasePatterns } = await import('./cycle/patterns.ts');

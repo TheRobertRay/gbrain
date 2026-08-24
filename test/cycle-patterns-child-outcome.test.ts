@@ -52,12 +52,13 @@ async function seedReflections(): Promise<void> {
   // Enough recent reflections to clear min_evidence (default 3).
   for (let i = 0; i < 3; i++) {
     await engine.executeRaw(
-      `INSERT INTO pages (slug, type, title, compiled_truth)
-       VALUES ($1, 'note', $2, $3)`,
+      `INSERT INTO pages (slug, type, title, compiled_truth, updated_at)
+       VALUES ($1, 'note', $2, $3, NOW() - ($4::int * INTERVAL '1 day'))`,
       [
         `wiki/personal/reflections/2026-07-0${i + 1}-reflection`,
         `Reflection ${i + 1}`,
         `Recurring theme fixture number ${i + 1}.`,
+        i,
       ],
     );
   }

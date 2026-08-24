@@ -43,7 +43,8 @@ import { probeChatModel } from '../ai/gateway.ts';
 import { normalizeModelId } from '../model-id.ts';
 
 export interface PatternsPhaseOpts {
-  brainDir: string;
+  /** Optional checkout used only for reverse-writing DB results to Markdown. */
+  brainDir: string | null;
   dryRun: boolean;
   yieldDuringPhase?: () => Promise<void>;
   /**
@@ -309,8 +310,11 @@ export async function runPhasePatterns(
     const cycleSourceId = opts.sourceId ?? 'default';
     const writtenRefs = await collectChildPutPageSlugs(engine, [job.id], cycleSourceId);
 
-    // Reverse-write to fs.
-    const reverseWriteCount = await reverseWriteRefs(engine, opts.brainDir, writtenRefs, cycleSourceId);
+    // The database is canonical for checkout-less Postgres brains. Mirror to
+    // Markdown only when this source actually has a local checkout.
+    const reverseWriteCount = opts.brainDir === null
+      ? 0
+      : await reverseWriteRefs(engine, opts.brainDir, writtenRefs, cycleSourceId);
 
     const details = {
       reflections_considered: reflections.length,

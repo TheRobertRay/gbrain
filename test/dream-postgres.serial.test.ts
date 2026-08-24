@@ -83,6 +83,31 @@ describe('runDream — checkout-less brain (no --dir, no sync.repo_path)', () =>
     expect(lint?.details?.reason).toBe('no_brain_dir');
   });
 
+  test('--phase patterns reads the database without requiring a checkout', async () => {
+    for (let i = 0; i < 3; i++) {
+      await engine.putPage(`wiki/personal/reflections/db-only-${i}`, {
+        type: 'note',
+        title: `DB-only reflection ${i}`,
+        compiled_truth: `Distinct recurring observation ${i} about protecting recovery time.`,
+        timeline: '',
+        frontmatter: {},
+      });
+      await engine.executeRaw(
+        `UPDATE pages SET updated_at = NOW() - ($2::int * INTERVAL '1 day') WHERE slug = $1`,
+        [`wiki/personal/reflections/db-only-${i}`, i],
+      );
+    }
+
+    const report = await runDream(engine, ['--phase', 'patterns', '--dry-run', '--json']);
+    expect(report).toBeTruthy();
+    if (!report) return;
+    expect(report.brain_dir).toBeNull();
+    const patterns = phase(report, 'patterns');
+    expect(patterns?.status).toBe('ok');
+    expect(patterns?.details?.reason).not.toBe('no_brain_dir');
+    expect(patterns?.details?.reflections_considered).toBe(3);
+  });
+
   test('--source <id> --dry-run on a checkout-less brain succeeds (the command doctor recommends)', async () => {
     await engine.executeRaw(
       `INSERT INTO sources (id, name, local_path, config, created_at)

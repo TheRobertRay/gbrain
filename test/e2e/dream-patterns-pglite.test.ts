@@ -61,6 +61,10 @@ async function seedReflections(engine: PGLiteEngine, count: number): Promise<voi
       timeline: '',
       frontmatter: { type: 'note', title: `Reflection ${i}` },
     });
+    await engine.executeRaw(
+      `UPDATE pages SET updated_at = NOW() - ($2::int * INTERVAL '1 day') WHERE slug = $1`,
+      [slug, i],
+    );
   }
 }
 
@@ -177,6 +181,7 @@ describe('E2E patterns — no reachable provider', () => {
     const rig = await setupRig();
     try {
       await seedReflections(rig.engine, 5); // above default min_evidence (3)
+      await rig.engine.setConfig('models.dream.patterns', 'anthropic:claude-sonnet-4-6');
       // Default patterns model resolves to Anthropic; with no key reachable
       // from EITHER source (env + config file — the shared helper neuters
       // both) the gateway probe reports the provider unavailable. A
