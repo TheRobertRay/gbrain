@@ -1690,6 +1690,12 @@ function adaptContentBlocksToChatBlocks(blocks: unknown): ChatBlock[] | string {
       : {};
     if (t === 'text' && typeof block.text === 'string') {
       out.push({ type: 'text', text: block.text, ...meta });
+    } else if (t === 'reasoning' && typeof block.text === 'string') {
+      // OpenAI Responses requires the reasoning item's opaque provider state
+      // to be replayed before its sibling function call. Keep it across both
+      // ordinary turns and crash recovery; gateway.chat never exposes it as
+      // final answer text.
+      out.push({ type: 'reasoning', text: block.text, ...meta });
     } else if (t === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string') {
       // v1 Anthropic shape
       out.push({

@@ -76,6 +76,20 @@ describe('adaptContentBlocksToChatBlocks (D5 — v1 Anthropic → v2 ChatBlock s
     expect('providerMetadata' in bare[0]).toBe(false);
   });
 
+  it('preserves an OpenAI Responses reasoning item across crash replay', () => {
+    const meta = {
+      openai: {
+        itemId: 'rs_fixture',
+        reasoningEncryptedContent: 'encrypted-fixture',
+      },
+    };
+    const blocks = [
+      { type: 'reasoning', text: '', providerMetadata: meta },
+      { type: 'tool-call', toolCallId: 'fc_fixture', toolName: 'search', input: { q: 'x' } },
+    ];
+    expect(adaptContentBlocksToChatBlocks(blocks)).toEqual(blocks);
+  });
+
   it('adapts v1 Anthropic tool_use block → v2 tool-call', () => {
     // Anthropic shape: {type:'tool_use', id, name, input}
     // Gateway ChatBlock shape: {type:'tool-call', toolCallId, toolName, input}

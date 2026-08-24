@@ -420,6 +420,37 @@ describe('chat touchpoint — per-part providerMetadata round trip (#4201)', () 
 
   const SIG = { google: { thoughtSignature: 'opaque-turn1-signature' } };
 
+  test('chat() preserves OpenAI Responses reasoning state without exposing it as answer text', async () => {
+    const reasoningMeta = {
+      openai: {
+        itemId: 'rs_fixture',
+        reasoningEncryptedContent: 'encrypted-fixture',
+      },
+    };
+    __setGenerateTextTransportForTests(async () => ({
+      content: [
+        { type: 'reasoning', text: '', providerMetadata: reasoningMeta },
+        { type: 'tool-call', toolCallId: 'fc_fixture', toolName: 'search', input: { q: 'x' } },
+      ],
+      finishReason: 'tool-calls',
+      usage: { inputTokens: 5, outputTokens: 5 },
+    }) as any);
+    configureGateway({
+      chat_model: 'openai:gpt-5.6-terra',
+      env: { OPENAI_API_KEY: 'fake' },
+    });
+    const result = await chat({
+      model: 'openai:gpt-5.6-terra',
+      messages: [{ role: 'user', content: 'hello' }],
+    });
+    expect(result.text).toBe('');
+    expect(result.blocks[0]).toEqual({
+      type: 'reasoning',
+      text: '',
+      providerMetadata: reasoningMeta,
+    });
+  });
+
   test('chat() captures part providerMetadata onto ChatBlocks (inbound half)', async () => {
     __setGenerateTextTransportForTests(async () => ({
       content: [

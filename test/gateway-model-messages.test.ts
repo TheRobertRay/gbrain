@@ -28,6 +28,27 @@ describe('toModelMessages — v6 ModelMessage shape', () => {
     ]);
   });
 
+  test('assistant reasoning block preserves opaque provider state for Responses replay', () => {
+    const meta = {
+      openai: {
+        itemId: 'rs_fixture',
+        reasoningEncryptedContent: 'encrypted-fixture',
+      },
+    };
+    const msgs: ChatMessage[] = [
+      {
+        role: 'assistant',
+        content: [{ type: 'reasoning', text: '', providerMetadata: meta }],
+      },
+    ];
+    expect(toModelMessages(msgs)).toEqual([
+      {
+        role: 'assistant',
+        content: [{ type: 'reasoning', text: '', providerOptions: meta }],
+      },
+    ]);
+  });
+
   test('assistant tool-call block keeps {toolCallId,toolName,input}', () => {
     const msgs: ChatMessage[] = [
       {

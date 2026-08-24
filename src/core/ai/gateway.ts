@@ -2962,14 +2962,17 @@ export type ChatRole = 'system' | 'user' | 'assistant' | 'tool';
  * Provider-neutral content block. `providerMetadata` is the per-part opaque
  * provider channel (#4201): some providers attach state to a part that MUST be
  * echoed back verbatim on the next request (Gemini 3.x `thoughtSignature` on
- * functionCall parts — dropped, the follow-up turn is refused). Captured from
- * the SDK part's `providerMetadata` in chat(), re-attached as `providerOptions`
- * on the rebuilt part in toModelMessages(), and carried through the replay shim
+ * functionCall parts; OpenAI Responses `itemId` on reasoning parts — dropped,
+ * the follow-up turn is refused). Captured from the SDK part's
+ * `providerMetadata` in chat(), re-attached as `providerOptions` on the rebuilt
+ * part in toModelMessages(), and carried through the replay shim
  * (adaptContentBlocksToChatBlocks). Attached ONLY when the provider sent one —
- * blocks from providers without per-part state stay byte-identical.
+ * blocks from providers without per-part state stay byte-identical. Reasoning
+ * blocks are opaque replay state: they are never folded into ChatResult.text.
  */
 export type ChatBlock =
   | { type: 'text'; text: string; providerMetadata?: Record<string, unknown> }
+  | { type: 'reasoning'; text: string; providerMetadata?: Record<string, unknown> }
   | { type: 'tool-call'; toolCallId: string; toolName: string; input: unknown; providerMetadata?: Record<string, unknown> }
   | { type: 'tool-result'; toolCallId: string; toolName: string; output: unknown; isError?: boolean; providerMetadata?: Record<string, unknown> };
 
@@ -3097,6 +3100,13 @@ export function toModelMessages(messages: ChatMessage[]): unknown[] {
           if (b.type === 'text') {
             return {
               type: 'text' as const,
+              text: b.text,
+              ...(b.providerMetadata ? { providerOptions: b.providerMetadata } : {}),
+            };
+          }
+          if (b.type === 'reasoning') {
+            return {
+              type: 'reasoning' as const,
               text: b.text,
               ...(b.providerMetadata ? { providerOptions: b.providerMetadata } : {}),
             };
@@ -3782,12 +3792,16 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
       for (const part of rawContent) {
         // #4201: capture per-part providerMetadata (Gemini 3.x thoughtSignature
         // arrives on functionCall/text parts and must be echoed back next turn).
-        // `reasoning` parts stay deliberately dropped: the echo requirement is
-        // on functionCall parts; reasoning text never re-enters the transcript.
+        // OpenAI Responses reasoning parts are also load-bearing replay state:
+        // their itemId must precede the sibling function_call on the next turn.
+        // Preserve the block but keep it out of ChatResult.text below.
         const partMeta = part.providerMetadata && typeof part.providerMetadata === 'object'
           ? { providerMetadata: part.providerMetadata as Record<string, unknown> }
           : {};
         if (part.type === 'text') blocks.push({ type: 'text', text: part.text, ...partMeta });
+        else if (part.type === 'reasoning' && typeof part.text === 'string') {
+          blocks.push({ type: 'reasoning', text: part.text, ...partMeta });
+        }
         else if (part.type === 'tool-call') {
           blocks.push({
             type: 'tool-call',
