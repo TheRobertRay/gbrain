@@ -1,5 +1,5 @@
 /**
- * v0.35.5 — engine parity for `refreshPageBody` + `migrateFactsToCanonical`.
+ * Engine parity for narrow page refreshes + `migrateFactsToCanonical`.
  *
  * These two new BrainEngine methods land in BOTH PGLite + Postgres. The
  * production cycle calls them transparently via the engine interface, so
@@ -117,6 +117,44 @@ describe('refreshPageBody (parity)', () => {
       // Cleanup the cross-source row before next engine
       await engine.executeRaw(`DELETE FROM pages WHERE source_id='other'`);
       await engine.executeRaw(`DELETE FROM sources WHERE id='other'`);
+    }
+  });
+});
+
+// ─── refreshPageProvenance parity ───────────────────────────────────
+
+describe('refreshPageProvenance (parity)', () => {
+  test('updates provenance only and is idempotent', async () => {
+    for (const engine of [pglite, pg].filter(Boolean) as BrainEngine[]) {
+      await seed(engine, 'inbox/provenance-retry', '# unchanged\n');
+      const before = await engine.getPage('inbox/provenance-retry', {
+        sourceId: 'default',
+      });
+      const provenance = {
+        source_kind: 'put_page',
+        source_uri: 'unified-life://op:0123456789abcdef0123456789abcdef',
+        ingested_via: 'unified-life-system',
+      };
+
+      await engine.refreshPageProvenance(
+        'inbox/provenance-retry',
+        'default',
+        provenance,
+      );
+      await engine.refreshPageProvenance(
+        'inbox/provenance-retry',
+        'default',
+        provenance,
+      );
+
+      const after = await engine.getPage('inbox/provenance-retry', {
+        sourceId: 'default',
+      });
+      expect(after?.compiled_truth).toBe(before?.compiled_truth);
+      expect(after?.content_hash).toBe(before?.content_hash);
+      expect(after?.source_kind).toBe(provenance.source_kind);
+      expect(after?.source_uri).toBe(provenance.source_uri);
+      expect(after?.ingested_via).toBe(provenance.ingested_via);
     }
   });
 });

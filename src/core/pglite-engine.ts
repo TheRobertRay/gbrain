@@ -1920,6 +1920,35 @@ export class PGLiteEngine implements BrainEngine {
     );
   }
 
+  async refreshPageProvenance(
+    slug: string,
+    sourceId: string,
+    provenance: {
+      source_kind?: string | null;
+      source_uri?: string | null;
+      ingested_via?: string | null;
+    },
+  ): Promise<void> {
+    await this.db.query(
+      `UPDATE pages
+         SET source_kind = COALESCE($1, source_kind),
+             source_uri = COALESCE($2, source_uri),
+             ingested_via = COALESCE($3, ingested_via),
+             ingested_at = now(),
+             updated_at = now()
+       WHERE source_id = $4
+         AND slug = $5
+         AND deleted_at IS NULL`,
+      [
+        provenance.source_kind ?? null,
+        provenance.source_uri ?? null,
+        provenance.ingested_via ?? null,
+        sourceId,
+        slug,
+      ],
+    );
+  }
+
   async updatePageContextualRetrievalState(
     slug: string,
     sourceId: string,

@@ -2250,6 +2250,22 @@ export interface BrainEngine {
   ): Promise<void>;
 
   /**
+   * Narrow provenance-only refresh for an unchanged page. This exists so an
+   * idempotent put_page retry can fill or explicitly replace provenance even
+   * when importFromContent correctly skips rechunking on an equal content hash.
+   * Leaves body, frontmatter, chunks, links, embeddings, and tags untouched.
+   */
+  refreshPageProvenance(
+    slug: string,
+    sourceId: string,
+    provenance: {
+      source_kind?: string | null;
+      source_uri?: string | null;
+      ingested_via?: string | null;
+    },
+  ): Promise<void>;
+
+  /**
    * v0.40.3.0 — narrow UPDATE that stamps the two CR-state columns
    * (`contextual_retrieval_mode`, `corpus_generation`) plus
    * `updated_at = now()` and nothing else.
