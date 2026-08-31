@@ -1534,6 +1534,32 @@ export class PostgresEngine implements BrainEngine {
     `;
   }
 
+  async refreshPageProvenance(
+    slug: string,
+    sourceId: string,
+    provenance: {
+      source_kind?: string | null;
+      source_uri?: string | null;
+      ingested_via?: string | null;
+    },
+  ): Promise<void> {
+    const sql = this.sql;
+    const sourceKind = provenance.source_kind ?? null;
+    const sourceUri = provenance.source_uri ?? null;
+    const ingestedVia = provenance.ingested_via ?? null;
+    await sql`
+      UPDATE pages
+      SET source_kind = COALESCE(${sourceKind}, source_kind),
+          source_uri = COALESCE(${sourceUri}, source_uri),
+          ingested_via = COALESCE(${ingestedVia}, ingested_via),
+          ingested_at = now(),
+          updated_at = now()
+      WHERE source_id = ${sourceId}
+        AND slug = ${slug}
+        AND deleted_at IS NULL
+    `;
+  }
+
   async updatePageContextualRetrievalState(
     slug: string,
     sourceId: string,

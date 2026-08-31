@@ -775,6 +775,72 @@ body unchanged
     shortCircuited = r2.status === 'skipped';
     expect(shortCircuited).toBe(true);
   });
+
+  test('equal-content retry refreshes changed provenance without rechunking', async () => {
+    const content = `---
+type: note
+---
+
+body unchanged
+`;
+    let firstPage: any;
+    const firstEngine = mockEngine({
+      getPage: () => Promise.resolve(null),
+      putPage: (_slug: string, page: any) => {
+        firstPage = page;
+      },
+    });
+    await importFromContent(firstEngine, 'inbox/provenance-retry', content, {
+      noEmbed: true,
+    });
+    const existing = {
+      ...firstPage,
+      id: 1,
+      slug: 'inbox/provenance-retry',
+      source_id: 'default',
+      created_at: new Date('2026-05-22T10:00:00Z'),
+      updated_at: new Date('2026-05-22T10:00:00Z'),
+      source_kind: 'mcp:put_page',
+      source_uri: null,
+      ingested_via: 'mcp:put_page',
+    };
+    const refreshed: any[] = [];
+    const retryEngine = mockEngine({
+      getPage: () => Promise.resolve(existing),
+      refreshPageProvenance: (...args: any[]) => {
+        refreshed.push(args);
+      },
+    });
+
+    const result = await importFromContent(
+      retryEngine,
+      'inbox/provenance-retry',
+      content,
+      {
+        noEmbed: true,
+        source_kind: 'put_page',
+        source_uri: 'unified-life://op:0123456789abcdef0123456789abcdef',
+        ingested_via: 'unified-life-system',
+      },
+    );
+
+    expect(result.status).toBe('skipped');
+    expect(result.chunks).toBe(0);
+    expect(refreshed).toEqual([
+      [
+        'inbox/provenance-retry',
+        'default',
+        {
+          source_kind: 'put_page',
+          source_uri: 'unified-life://op:0123456789abcdef0123456789abcdef',
+          ingested_via: 'unified-life-system',
+        },
+      ],
+    ]);
+    const methods = (retryEngine as any)._calls.map((call: any) => call.method);
+    expect(methods).not.toContain('putPage');
+    expect(methods).not.toContain('upsertChunks');
+  });
 });
 
 // ────────────────────────────────────────────────────────────────

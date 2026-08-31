@@ -676,6 +676,17 @@ export async function importFromContent(
   };
 
   if (existing?.content_hash === hash && !opts.forceRechunk) {
+    const provenanceChanged =
+      (opts.source_kind != null && opts.source_kind !== existing.source_kind)
+      || (opts.source_uri != null && opts.source_uri !== existing.source_uri)
+      || (opts.ingested_via != null && opts.ingested_via !== existing.ingested_via);
+    if (provenanceChanged) {
+      await engine.refreshPageProvenance(slug, sourceId ?? 'default', {
+        source_kind: opts.source_kind,
+        source_uri: opts.source_uri,
+        ingested_via: opts.ingested_via,
+      });
+    }
     return { slug, status: 'skipped', chunks: 0, parsedPage, ...(typeWarning ? { type_warning: typeWarning } : {}) };
   }
 
