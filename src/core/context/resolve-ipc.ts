@@ -255,6 +255,8 @@ export interface ContextPackResponse {
   block?: TurnContextResult | null;
   degradedReason?: string;
   error?: string;
+  /** Explicit acknowledgement after the private authorization gate. */
+  privateContext?: boolean;
 }
 
 export type ResolveHandler = (req: ResolveRequest) => Promise<PointerBlock | null>;
@@ -961,6 +963,7 @@ async function handleContextPack(
       ok: true,
       protocol: 2,
       block: result,
+      privateContext: req.includePrivate === true,
       ...(result?.degradedReason ? { degradedReason: result.degradedReason } : {}),
     };
   } catch (e) {

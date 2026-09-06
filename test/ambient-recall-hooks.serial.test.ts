@@ -223,6 +223,7 @@ describe('context_pack over IPC', () => {
     const resp = res as ContextPackResponse;
     expect(resp.ok).toBe(true);
     expect(resp.block?.text).toBe('PRIVATE');
+    expect(resp.privateContext).toBe(true);
     expect(seenPrivate).toBe(true);
   });
 
