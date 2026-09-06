@@ -57,6 +57,21 @@ describe('resolve IPC', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  test('simultaneous starts leave exactly one reachable owner', async () => {
+    const dir = tmpDir();
+    const sock = resolveSocketPath(dir);
+    const pair = await Promise.all([
+      startResolveIpcServer(sock, async () => ({ pointers: [], text: 'OWNER' })),
+      startResolveIpcServer(sock, async () => ({ pointers: [], text: 'OWNER' })),
+    ]);
+    const owners = pair.filter((server) => server !== null);
+    expect(owners).toHaveLength(1);
+    servers.push(owners[0]!);
+    const got = await resolveViaIpc(sock, { candidates: [] });
+    expect((got as PointerBlock).text).toBe('OWNER');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   test('a killed listener leaves a socket that can be safely reclaimed', async () => {
     if (process.platform === 'win32') return;
     const dir = tmpDir();
