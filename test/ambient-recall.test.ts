@@ -479,6 +479,72 @@ describe('delta cursor lifecycle', () => {
 });
 
 describe('push-path IPC handler (extracted, real engine)', () => {
+  test('explicit private IPC assembly widens the fact arm while the default stays world-only', async () => {
+    const local = ctxFor({ remote: false });
+    await call(remember, local, {
+      fact: 'ipc-private-example public preference',
+      provenance: 'test',
+      entity: 'ipc-private-example',
+      visibility: 'world',
+    });
+    await call(remember, local, {
+      fact: 'ipc-private-example confidential preference',
+      provenance: 'test',
+      entity: 'ipc-private-example',
+      visibility: 'private',
+    });
+    __resetHotMemoryCacheForTests();
+
+    const { makeContextPackIpcHandler } = await import('../src/mcp/context-pack-handler.ts');
+    const handler = makeContextPackIpcHandler(engine, 'default');
+    const world = await handler({
+      kind: 'context_pack', protocol: 2, secret: 's',
+      entities: ['ipc-private-example'],
+    });
+    const widened = await handler({
+      kind: 'context_pack', protocol: 2, secret: 's',
+      entities: ['ipc-private-example'],
+      includePrivate: true,
+    });
+
+    expect(world?.text).toContain('public preference');
+    expect(world?.text).not.toContain('confidential preference');
+    expect(widened?.text).toContain('public preference');
+    expect(widened?.text).toContain('confidential preference');
+  });
+
+  test('a newly written no-model private fact stays out of the next authorized IPC pack', async () => {
+    const local = ctxFor({ remote: false });
+    await call(remember, local, {
+      fact: 'ipc-eligibility-example ordinary private preference',
+      provenance: 'test',
+      entity: 'ipc-eligibility-example',
+      visibility: 'private',
+    });
+    await call(remember, local, {
+      fact: 'ipc-eligibility-example [gbrain:no-model] password: short-secret',
+      provenance: 'test',
+      entity: 'ipc-eligibility-example',
+      visibility: 'private',
+    });
+    __resetHotMemoryCacheForTests();
+
+    const { makeContextPackIpcHandler } = await import('../src/mcp/context-pack-handler.ts');
+    const handler = makeContextPackIpcHandler(engine, 'default');
+    const widened = await handler({
+      kind: 'context_pack', protocol: 2, secret: 's',
+      entities: ['ipc-eligibility-example'],
+      includePrivate: true,
+    });
+
+    expect(widened?.text).toContain('ordinary private preference');
+    expect(widened?.text).not.toContain('short-secret');
+    expect(widened?.facts?.map((f) => f.fact)).toContain(
+      'ipc-eligibility-example ordinary private preference',
+    );
+    expect(widened?.facts?.some((f) => f.fact.includes('short-secret'))).toBe(false);
+  });
+
   test('bankOnly persists standing entities under the local lane; assembly merges them back', async () => {
     const { makeContextPackIpcHandler } = await import('../src/mcp/context-pack-handler.ts');
     const handler = makeContextPackIpcHandler(engine, 'default');
@@ -640,6 +706,52 @@ describe('visibility (eng 1A / D2=A): world-only default, fail-closed widen', ()
     const facts = (r.facts as Array<{ fact: string }>).map((f) => f.fact).join(' | ');
     expect(facts).not.toContain('secret burn rate');
     expect(r.text as string).not.toContain('secret burn rate');
+  });
+
+  test('delta page arm widens private pages only for trusted local include_private', async () => {
+    const since = new Date(Date.now() - 5 * 60_000).toISOString();
+    await engine.putPage('notes/delta-world-page', {
+      title: 'Delta World Page',
+      type: 'note',
+      frontmatter: { visibility: 'world' },
+      compiled_truth: 'world page body',
+      timeline: '',
+    });
+    await engine.putPage('notes/delta-private-page', {
+      title: 'Delta Private Page',
+      type: 'note',
+      frontmatter: { visibility: 'private' },
+      compiled_truth: 'private page body',
+      timeline: '',
+    });
+
+    const worldOnly = await call(del, ctxFor({ remote: false }), { since });
+    const widened = await call(del, ctxFor({ remote: false }), {
+      since,
+      include_private: true,
+    });
+    const remote = await call(del, ctxFor({ remote: true, clientId: 'c1' }), {
+      since,
+      include_private: true,
+    });
+
+    for (const result of [worldOnly, widened, remote]) {
+      expect(result.pages.map((p: { slug: string }) => p.slug)).toContain(
+        'notes/delta-world-page',
+      );
+    }
+    expect(worldOnly.pages.map((p: { slug: string }) => p.slug)).not.toContain(
+      'notes/delta-private-page',
+    );
+    expect(worldOnly.text as string).not.toContain('Delta Private Page');
+    expect(widened.pages.map((p: { slug: string }) => p.slug)).toContain(
+      'notes/delta-private-page',
+    );
+    expect(widened.text as string).toContain('Delta Private Page');
+    expect(remote.pages.map((p: { slug: string }) => p.slug)).not.toContain(
+      'notes/delta-private-page',
+    );
+    expect(remote.text as string).not.toContain('Delta Private Page');
   });
 });
 
