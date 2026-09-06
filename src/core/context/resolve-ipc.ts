@@ -52,7 +52,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import {
   existsSync,
   unlinkSync,
-  statSync,
+  lstatSync,
   chmodSync,
   mkdirSync,
   readFileSync,
@@ -760,7 +760,7 @@ export async function startResolveIpcServer(
   } catch { /* best effort */ }
 
   // Remove a stale socket file if present (a previous serve that didn't clean up).
-  cleanupStaleSocket(socketPath);
+  if (!(await cleanupStaleSocket(socketPath))) return null;
 
   return new Promise((resolve) => {
     const server = net.createServer((conn) => {
@@ -972,16 +972,43 @@ async function handleSyncKind<Req extends { protocol: number; secret: string }, 
   }
 }
 
-/** Remove a socket file whose owning process is gone (or any leftover file). */
-export function cleanupStaleSocket(socketPath: string): void {
+/** Prepare an unused socket path without stealing another serve's endpoint.
+ * A second PostgreSQL client can coexist with serve. Its optional IPC listener
+ * must not unlink the first client's socket at startup or shutdown.
+ */
+export async function cleanupStaleSocket(socketPath: string): Promise<boolean> {
+  let original: ReturnType<typeof lstatSync>;
   try {
-    if (existsSync(socketPath)) {
-      // A unix socket shows up as a socket file; unlink unconditionally — if a
-      // live server holds it, listen() below would fail and we return null.
-      const st = statSync(socketPath);
-      if (st.isSocket() || st.isFIFO() || st.isFile()) unlinkSync(socketPath);
+    original = lstatSync(socketPath);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT';
+  }
+  // Do not follow symlinks or remove unrelated files, FIFOs, or directories.
+  if (!original.isSocket()) return false;
+  const stale = await new Promise<boolean>((resolve) => {
+    const client = net.createConnection(socketPath);
+    let settled = false;
+    const finish = (value: boolean) => {
+      if (settled) return;
+      settled = true;
+      client.destroy();
+      resolve(value);
+    };
+    client.setTimeout(250, () => finish(false));
+    client.once('connect', () => finish(false));
+    client.once('error', (error: NodeJS.ErrnoException) => {
+      finish(error.code === 'ECONNREFUSED' || error.code === 'ENOENT');
+    });
+  });
+  if (!stale) return false;
+  try {
+    const current = lstatSync(socketPath);
+    if (!current.isSocket() || current.dev !== original.dev || current.ino !== original.ino) {
+      return false;
     }
-  } catch {
-    /* best effort */
+    unlinkSync(socketPath);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT';
   }
 }

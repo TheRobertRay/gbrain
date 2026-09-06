@@ -15,7 +15,6 @@ import { loadConfig } from '../core/config.ts';
 import {
   resolveSocketPathForConfig,
   startResolveIpcServer,
-  cleanupStaleSocket,
   ensureIpcSecretForConfig,
   type IpcHandlers,
 } from '../core/context/resolve-ipc.ts';
@@ -349,7 +348,8 @@ export async function startMcpServer(engine: BrainEngine, opts: { surface?: McpS
     process.stderr.write(`[gbrain-serve] shutdown: ${reason}\n`);
     try { startupSweep?.cancel(); } catch { /* noop */ }
     try { resolveServer?.close(); } catch { /* noop */ }
-    if (resolveSocket) cleanupStaleSocket(resolveSocket);
+    // net.Server closes its own endpoint. A client that did not acquire the
+    // optional IPC listener must never clean up another serve's socket.
     // Cathedral 5: abort the in-flight checkpoint harvest + drop its queue
     // BEFORE engine.disconnect — the background-work registry's drain is
     // CLI-exit-only by contract, and a fire-and-forget DB writer surviving

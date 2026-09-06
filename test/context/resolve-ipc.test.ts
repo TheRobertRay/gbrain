@@ -2,7 +2,7 @@
  * Retrieval Reflex resolve IPC round-trip tests (#1981, T3/T5).
  */
 import { describe, test, expect, afterEach } from 'bun:test';
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -10,6 +10,7 @@ import {
   startResolveIpcServer,
   resolveViaIpc,
   IPC_UNAVAILABLE,
+  cleanupStaleSocket,
 } from '../../src/core/context/resolve-ipc.ts';
 import type { PointerBlock } from '../../src/core/context/retrieval-reflex.ts';
 
@@ -40,6 +41,55 @@ describe('resolve IPC', () => {
     const got = await resolveViaIpc(sock, { candidates: [{ display: 'Alice', query: 'Alice' }] });
     expect(got).not.toBe(IPC_UNAVAILABLE);
     expect((got as PointerBlock).text).toBe('BLOCK');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('a second serve cannot steal the live IPC endpoint', async () => {
+    const dir = tmpDir();
+    const sock = resolveSocketPath(dir);
+    const first = await startResolveIpcServer(sock, async () => ({ pointers: [], text: 'FIRST' }));
+    servers.push(first!);
+    const second = await startResolveIpcServer(sock, async () => ({ pointers: [], text: 'SECOND' }));
+    expect(second).toBeNull();
+    expect(await cleanupStaleSocket(sock)).toBe(false);
+    const got = await resolveViaIpc(sock, { candidates: [] });
+    expect((got as PointerBlock).text).toBe('FIRST');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('a killed listener leaves a socket that can be safely reclaimed', async () => {
+    if (process.platform === 'win32') return;
+    const dir = tmpDir();
+    const sock = resolveSocketPath(dir);
+    const child = Bun.spawn([process.execPath, '-e',
+      "const net = require('node:net'); net.createServer().listen(process.argv[1], () => process.stdout.write('ready'));",
+      sock], { stdout: 'pipe', stderr: 'pipe' });
+    try {
+      const reader = child.stdout.getReader();
+      const ready = await reader.read();
+      reader.releaseLock();
+      expect(new TextDecoder().decode(ready.value)).toBe('ready');
+      child.kill('SIGKILL');
+      await child.exited;
+      expect(existsSync(sock)).toBe(true);
+      const replacement = await startResolveIpcServer(sock, async () => ({ pointers: [], text: 'RECOVERED' }));
+      expect(replacement).not.toBeNull();
+      servers.push(replacement!);
+      const got = await resolveViaIpc(sock, { candidates: [] });
+      expect((got as PointerBlock).text).toBe('RECOVERED');
+    } finally {
+      child.kill();
+      await child.exited;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('socket preparation preserves unrelated regular files', async () => {
+    const dir = tmpDir();
+    const sock = resolveSocketPath(dir);
+    writeFileSync(sock, 'preserve');
+    expect(await startResolveIpcServer(sock, async () => null)).toBeNull();
+    expect(readFileSync(sock, 'utf8')).toBe('preserve');
     rmSync(dir, { recursive: true, force: true });
   });
 
