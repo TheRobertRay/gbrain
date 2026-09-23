@@ -140,7 +140,10 @@ export function rankOpenAIChatModels(
   const parsed = ids.map(parseOpenAIChatId).filter((p): p is ParsedOpenAIChatId => p !== null);
   if (parsed.length === 0) return { tiers: null };
 
-  const eligible = parsed.filter((p) => priced(p.id));
+  // GPT-6 Luna is priced for explicit use (for example, bounded fact
+  // extraction), but a lone utility model must not become the global deep
+  // default before the rest of its family is priced and qualified.
+  const eligible = parsed.filter((p) => p.id !== 'gpt-6-luna' && priced(p.id));
   const skipped = parsed.filter((p) => !priced(p.id));
   const newestSkipped = skipped.sort((a, b) => familyCmp(b.family, a.family))[0];
 

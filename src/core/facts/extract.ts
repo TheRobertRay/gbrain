@@ -99,6 +99,10 @@ export const ENTITY_HINTS_CAP = 5;
 
 export interface ExtractInput {
   turnText: string;
+  /** Require each emitted claim to cite an exact source-utterance substring. */
+  requireEvidence?: boolean;
+  /** Source utterances, excluding assistant summaries and generated metadata. */
+  evidenceTexts?: string[];
   /** Opaque session id (MCP _meta.session_id, CLI --session, or null). */
   sessionId?: string | null;
   /** Existing canonical entity slugs the agent already resolved (D4 hint). */
@@ -184,6 +188,8 @@ const EXTRACTOR_SYSTEM = [
   '',
   'Rules:',
   '- Capture user statements verbatim where possible. Do not paraphrase tone.',
+  '- Only assert what the speaker actually said. Preserve uncertainty and plans as uncertainty and plans; do not turn a hypothetical into an event.',
+  '- Do not infer a relationship, identity, or ownership from ambiguous words such as "we". Skip a claim if its subject or status is unclear.',
   '- "event": something that happened or is scheduled at a specific time.',
   '- "preference": durable taste/like/dislike (e.g. "doesn\'t drink coffee").',
   '- "commitment": a promise/agreement/decision to do something.',
@@ -312,6 +318,9 @@ export async function extractFactsFromTurnWithOutcome(
       ? ` Known entity slugs the user already mentioned: ${input.entityHints.slice(0, ENTITY_HINTS_CAP).join(', ')}.`
       : ''
   }`;
+  const system = input.requireEvidence
+    ? `${EXTRACTOR_SYSTEM}\nFor each fact include an "evidence" field containing an exact, contiguous quote from the speaker's words. Omit unsupported claims. Do not quote the page title or metadata.`
+    : EXTRACTOR_SYSTEM;
   let result: ChatResult;
   // The cap the last call was actually sent at. When the truncation retry
   // escalates to maxTokens*2, the malformed-output retry below must re-send
@@ -320,7 +329,7 @@ export async function extractFactsFromTurnWithOutcome(
   try {
     result = await chat({
       model,
-      system: EXTRACTOR_SYSTEM,
+      system,
       messages: [{ role: 'user', content: userContent }],
       maxTokens,
       abortSignal: input.abortSignal,
@@ -337,7 +346,7 @@ export async function extractFactsFromTurnWithOutcome(
       effectiveMaxTokens = maxTokens * 2;
       result = await chat({
         model,
-        system: EXTRACTOR_SYSTEM,
+        system,
         messages: [{ role: 'user', content: userContent }],
         maxTokens: effectiveMaxTokens,
         abortSignal: input.abortSignal,
@@ -376,7 +385,7 @@ export async function extractFactsFromTurnWithOutcome(
     try {
       result = await chat({
         model,
-        system: `${EXTRACTOR_SYSTEM}\nThe previous attempt returned invalid JSON or an invalid facts schema. ` +
+        system: `${system}\nThe previous attempt returned invalid JSON or an invalid facts schema. ` +
           'Return exactly one valid JSON object and no prose.',
         messages: [{ role: 'user', content: userContent }],
         maxTokens: effectiveMaxTokens,
@@ -421,6 +430,15 @@ export async function extractFactsFromTurnWithOutcome(
     }
     let factText = candidate.fact.trim();
     if (!factText) continue;
+    const evidence = candidate.evidence?.trim();
+    if (input.requireEvidence && (
+      !evidence || evidence.length < 8 ||
+      !input.evidenceTexts?.some((utterance) => utterance.includes(evidence))
+    )) {
+      // Fail the segment rather than writing a partial or unsupported fact
+      // and falsely recording this conversation page as complete.
+      return { ok: false, reason: 'malformed_output', model };
+    }
     // Sanitize on the way OUT too.
     for (const p of INJECTION_PATTERNS) factText = factText.replace(p.rx, p.replacement);
     if (factText.length > 500) factText = factText.slice(0, 497) + '...';
@@ -454,6 +472,7 @@ export async function extractFactsFromTurnWithOutcome(
 
     facts.push({
       fact: factText,
+      ...(input.requireEvidence ? { context: `Direct source quote: ${evidence}` } : {}),
       kind,
       // Unknown-speaker gate: if the LLM echoed an anonymous-speaker label back
       // as the entity (self-attribution of a first-person claim from a speaker
@@ -504,6 +523,7 @@ export async function extractFactsFromTurn(input: ExtractInput): Promise<Extract
 
 interface RawExtracted {
   fact: string;
+  evidence?: string;
   kind: string;
   entity?: string | null;
   confidence?: number;
@@ -564,6 +584,7 @@ function tryArrayShapeDetailed(s: string): ParsedExtractorShape | null {
       }
       out.push({
         fact: o.fact,
+        evidence: typeof o.evidence === 'string' ? o.evidence : undefined,
         kind: o.kind,
         entity: typeof o.entity === 'string' ? o.entity : null,
         confidence: typeof o.confidence === 'number' ? o.confidence : 1.0,

@@ -484,13 +484,16 @@ export function splitIntoSegments(
 export function renderSegmentForExtraction(
   pageTitle: string,
   segment: ConversationSegment,
+  speaker?: string,
 ): string {
   const header = [
     `Page: ${pageTitle}`,
     `Conversation between ${segment.participants.join(' and ')} from ${segment.startIso} to ${segment.endIso}`,
+    ...(speaker ? [`Only ${speaker}'s words below are evidence for extracted facts.`] : []),
     '---',
   ].join('\n');
   const body = segment.messages
+    .filter((m) => !speaker || m.speaker === speaker)
     .map((m) => `${m.speaker} (${m.timestamp}): ${m.text}`)
     .join('\n');
   const full = `${header}\n${body}`;
@@ -985,6 +988,10 @@ async function processPage(
       );
     }
   }
+  // Native agent-session pages mark the human's turns as User. Assistant text
+  // may summarize or infer details and must never become direct User facts.
+  const userOnly = page.slug.startsWith('conversations/sessions/') &&
+    messages.some((m) => m.speaker === 'User');
   const allSegments = splitIntoSegments(messages);
   const segments = splitIntoSegments(messages, { sinceIso });
   if (segments.length === 0) {
@@ -1057,7 +1064,12 @@ async function processPage(
     if (state.segmentLimit > 0 && segmentsThisPage >= state.segmentLimit) break;
     if (state.signal?.aborted) throw new Error('aborted');
 
-    const text = renderSegmentForExtraction(page.title || page.slug, seg);
+    if (userOnly && !seg.messages.some((m) => m.speaker === 'User')) {
+      newestEnd = seg.endIso;
+      continue;
+    }
+
+    const text = renderSegmentForExtraction(page.title || page.slug, seg, userOnly ? 'User' : undefined);
     const sessionId = `${PER_SEGMENT_SOURCE_PREFIX}:${page.slug}`;
 
     // BrainBench (decision 15) may inject a deterministic extractor; when it
@@ -1077,6 +1089,8 @@ async function processPage(
     } else {
       const extraction = await extractFactsFromTurnWithOutcome({
         turnText: text,
+        requireEvidence: userOnly,
+        evidenceTexts: userOnly ? seg.messages.filter((m) => m.speaker === 'User').map((m) => m.text) : undefined,
         sessionId,
         source: PER_SEGMENT_SOURCE_PREFIX,
         engine: state.engine,

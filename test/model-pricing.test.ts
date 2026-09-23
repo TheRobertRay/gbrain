@@ -24,6 +24,11 @@ import { MODEL_PRICING } from '../src/core/takes-quality-eval/pricing.ts';
 import { estimateAnthropicCost } from '../src/core/brain-score-recommendations.ts';
 
 describe('CANONICAL_PRICING — table integrity', () => {
+  test('GPT-6 Luna has verified Standard short-context rates for budget admission', () => {
+    expect(CANONICAL_PRICING['openai:gpt-6-luna']).toEqual({
+      input: 0.10, output: 0.50, cache_read: 0.01, cache_write: 0.125,
+    });
+  });
   test('every entry has finite positive rates and a provider-prefixed key', () => {
     for (const [key, p] of Object.entries(CANONICAL_PRICING)) {
       expect(Number.isFinite(p.input)).toBe(true);
@@ -86,10 +91,8 @@ describe('CANONICAL_PRICING — table integrity', () => {
         expect(Number.isFinite(p.cache_write)).toBe(true);
         expect(p.cache_write).toBeGreaterThan(p.input);
       }
-      // Non-Anthropic rows deliberately carry NO cache fields until their
-      // provider's cache pricing is verified — consumers fall back to the
-      // input rate (documented in ModelPricing).
-      if (!key.startsWith('anthropic:')) {
+      // Other rows omit cache fields until provider rates are verified.
+      if (!key.startsWith('anthropic:') && key !== 'openai:gpt-6-luna') {
         expect(p.cache_read).toBeUndefined();
         expect(p.cache_write).toBeUndefined();
       }
