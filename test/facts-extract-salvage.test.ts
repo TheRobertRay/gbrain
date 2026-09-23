@@ -55,6 +55,16 @@ describe('facts extractor candidate salvage (#3866)', () => {
     });
     expect(accepted.ok).toBe(true);
     if (accepted.ok) expect(accepted.facts[0]?.context).toContain('I prefer a quiet apartment');
+
+    stubFacts([{ fact: 'The rent increase occurred', kind: 'event', evidence: 'it definitely happened.' }]);
+    const contextual = await extractFactsFromTurnWithOutcome({
+      turnText: 'User: On the rent increase part, it definitely happened.',
+      source: 'test:agent-session',
+      requireEvidence: true,
+      evidenceTexts: ['On the rent increase part, it definitely happened.'],
+    });
+    expect(contextual.ok).toBe(true);
+    if (contextual.ok) expect(contextual.facts[0]?.context).toContain('rent increase part');
   });
   test('keeps valid facts when another candidate is malformed', async () => {
     stubFacts([

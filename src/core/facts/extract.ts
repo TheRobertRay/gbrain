@@ -319,7 +319,7 @@ export async function extractFactsFromTurnWithOutcome(
       : ''
   }`;
   const system = input.requireEvidence
-    ? `${EXTRACTOR_SYSTEM}\nFor each fact include an "evidence" field containing an exact, contiguous quote from the speaker's words. Omit unsupported claims. Do not quote the page title or metadata.`
+    ? `${EXTRACTOR_SYSTEM}\nFor each fact include an "evidence" field copied as an exact, contiguous substring from the speaker's words, with identical punctuation, capitalization, spaces, and ellipses. Never clean up or splice a quote. The quote must explicitly support the fact on its own; omit ambiguous or unsupported claims. Do not quote the page title or metadata.`
     : EXTRACTOR_SYSTEM;
   let result: ChatResult;
   // The cap the last call was actually sent at. When the truncation retry
@@ -439,6 +439,11 @@ export async function extractFactsFromTurnWithOutcome(
       // and falsely recording this conversation page as complete.
       return { ok: false, reason: 'malformed_output', model };
     }
+    const utterance = evidence && input.evidenceTexts?.find((text) => text.includes(evidence));
+    const quoteAt = utterance && evidence ? utterance.indexOf(evidence) : -1;
+    const passage = utterance && evidence && quoteAt >= 0
+      ? utterance.slice(Math.max(0, quoteAt - 160), Math.min(utterance.length, quoteAt + evidence.length + 160)).trim()
+      : undefined;
     // Sanitize on the way OUT too.
     for (const p of INJECTION_PATTERNS) factText = factText.replace(p.rx, p.replacement);
     if (factText.length > 500) factText = factText.slice(0, 497) + '...';
@@ -472,7 +477,7 @@ export async function extractFactsFromTurnWithOutcome(
 
     facts.push({
       fact: factText,
-      ...(input.requireEvidence ? { context: `Direct source quote: ${evidence}` } : {}),
+      ...(input.requireEvidence ? { context: `Direct source quote: ${evidence}\nSurrounding source: ${passage}` } : {}),
       kind,
       // Unknown-speaker gate: if the LLM echoed an anonymous-speaker label back
       // as the entity (self-attribution of a first-person claim from a speaker
