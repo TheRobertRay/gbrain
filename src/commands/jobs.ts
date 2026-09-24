@@ -2287,6 +2287,9 @@ export async function registerBuiltinHandlers(
       sourceId,
       types,
       slug: typeof job.data.slug === 'string' ? job.data.slug : undefined,
+      slugs: Array.isArray(job.data.slugs)
+        ? (job.data.slugs as unknown[]).filter((slug): slug is string => typeof slug === 'string' && slug.length > 0)
+        : undefined,
       dryRun: !!job.data.dryRun,
       limit: typeof job.data.limit === 'number' ? job.data.limit : undefined,
       sinceIso: typeof job.data.sinceIso === 'string' ? job.data.sinceIso : undefined,

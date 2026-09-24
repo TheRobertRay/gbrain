@@ -1864,12 +1864,13 @@ in the facts table (source='${TERMINAL_AUDIT_SOURCE}'). gbrain doctor's
 conversation_facts_backlog check counts pages without this row.
 `;
 
-function buildJobParams(args: string[]): Record<string, unknown> {
+export function buildJobParams(args: string[], selectedSlugs?: string[]): Record<string, unknown> {
   const parsed = parseArgs(args);
   return {
     sourceId: parsed.sourceId,
     types: parsed.types,
     slug: parsed.slug,
+    slugs: selectedSlugs,
     dryRun: parsed.dryRun,
     limit: parsed.limit,
     sinceIso: parsed.sinceIso,
@@ -1896,15 +1897,6 @@ export async function runExtractConversationFacts(
     return;
   }
 
-  // --background path.
-  const backgrounded = await maybeBackground({
-    engine,
-    args,
-    jobName: 'extract-conversation-facts',
-    paramBuilder: buildJobParams,
-  });
-  if (backgrounded) return;
-
   const parsed = parseArgs(args);
   if (parsed.error) {
     console.error(parsed.error);
@@ -1924,7 +1916,25 @@ export async function runExtractConversationFacts(
       console.error('--slugs-file exceeds the 1000-page batch limit');
       process.exit(1);
     }
+    if (selectedSlugs.length === 0) {
+      console.error('--slugs-file is empty; refusing an unrestricted extraction');
+      process.exit(1);
+    }
+    if (!parsed.sourceId) {
+      console.error('--slugs-file requires --source-id so one cost cap covers the selected batch');
+      process.exit(1);
+    }
   }
+
+  // Resolve the file before queue submission. The worker cannot safely read
+  // an ephemeral caller-side path, and omitting it widens the job to all pages.
+  const backgrounded = await maybeBackground({
+    engine,
+    args,
+    jobName: 'extract-conversation-facts',
+    paramBuilder: (jobArgs) => buildJobParams(jobArgs, selectedSlugs),
+  });
+  if (backgrounded) return;
 
   // Chat gateway is required for non-dry-run. Recover a cold singleton before
   // reporting an availability error (#2590).
