@@ -1110,6 +1110,7 @@ async function processPage(
       const extraction = await extractFactsFromTurnWithOutcome({
         turnText: text,
         requireEvidence: userOnly,
+        maxFactsPerTurn: userOnly ? 4 : undefined,
         evidenceTexts: userOnly ? evidenceMessages.map((m) => m.text) : undefined,
         sessionId,
         source: PER_SEGMENT_SOURCE_PREFIX,
