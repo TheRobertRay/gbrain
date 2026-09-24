@@ -421,6 +421,7 @@ export function parseConversationMessages(
 export interface SplitSegmentsOpts {
   gapMinutes?: number;
   maxMessages?: number;
+  minMessages?: number;
   /** Drop messages with timestamp <= this ISO before splitting. */
   sinceIso?: string;
 }
@@ -431,6 +432,7 @@ export function splitIntoSegments(
 ): ConversationSegment[] {
   const gapMs = (opts.gapMinutes ?? DEFAULT_SEGMENT_GAP_MINUTES) * 60_000;
   const maxMessages = opts.maxMessages ?? DEFAULT_SEGMENT_MAX_MESSAGES;
+  const minMessages = opts.minMessages ?? MIN_SEGMENT_MESSAGES;
   const sinceMs = opts.sinceIso ? Date.parse(opts.sinceIso) : NaN;
 
   const filtered = Number.isFinite(sinceMs)
@@ -442,7 +444,7 @@ export function splitIntoSegments(
   let lastTs: number | null = null;
 
   const flush = () => {
-    if (cur.length < MIN_SEGMENT_MESSAGES) {
+    if (cur.length < minMessages) {
       cur = [];
       return;
     }
@@ -1002,8 +1004,12 @@ async function processPage(
   // Native agent-session pages mark the human's turns as User. Assistant text
   // may summarize or infer details and must never become direct User facts.
   const userOnly = page.slug.startsWith('conversations/sessions/');
-  const allSegments = splitIntoSegments(messages);
-  const segments = splitIntoSegments(messages, { sinceIso });
+  // Imported Codex pages may contain one substantial User utterance. The
+  // general two-message rule drops it, although a quote-backed personal fact
+  // can be extracted safely without an Assistant reply.
+  const minMessages = userOnly ? 1 : undefined;
+  const allSegments = splitIntoSegments(messages, { minMessages });
+  const segments = splitIntoSegments(messages, { sinceIso, minMessages });
   if (segments.length === 0) {
     state.result.pages_skipped++;
     if (
