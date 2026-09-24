@@ -990,8 +990,7 @@ async function processPage(
   }
   // Native agent-session pages mark the human's turns as User. Assistant text
   // may summarize or infer details and must never become direct User facts.
-  const userOnly = page.slug.startsWith('conversations/sessions/') &&
-    messages.some((m) => m.speaker === 'User');
+  const userOnly = page.slug.startsWith('conversations/sessions/');
   const allSegments = splitIntoSegments(messages);
   const segments = splitIntoSegments(messages, { sinceIso });
   if (segments.length === 0) {

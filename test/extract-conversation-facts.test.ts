@@ -566,6 +566,27 @@ describe('runExtractConversationFactsCore', () => {
     expect(inputs[0]).not.toContain('You have a private jet');
   });
 
+  test('assistant-only agent session cannot fall back to Assistant evidence', async () => {
+    const slug = 'conversations/sessions/assistant-only';
+    await engine.putPage(slug, {
+      type: 'conversation',
+      title: 'Assistant-only agent session',
+      compiled_truth: [
+        fmt('Assistant', '2024-03-15', '9:00 AM', 'Robert owns a yacht'),
+        fmt('Assistant', '2024-03-15', '9:01 AM', 'Robert has a private jet'),
+      ].join('\n'),
+      timeline: '',
+      frontmatter: {},
+    });
+    const inputs: string[] = [];
+    const result = await runExtractConversationFactsCore(engine, {
+      sourceId: 'default', slug, sleepMs: 0,
+      extractor: async ({ turnText }) => { inputs.push(turnText); return []; },
+    });
+    expect(result.facts_inserted).toBe(0);
+    expect(inputs).toHaveLength(0);
+  });
+
   test('dry-run does not write the extract_rollup_7d cache row', async () => {
     // Regression: --dry-run promises "no DB writes" but writeRunReceiptAndRollup
     // upsert-ed extract_rollup_7d unconditionally. A preview must not mutate the DB.
