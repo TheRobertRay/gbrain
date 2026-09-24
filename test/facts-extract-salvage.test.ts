@@ -35,6 +35,20 @@ async function extract() {
 }
 
 describe('facts extractor candidate salvage (#3866)', () => {
+  test('agent-session memory drops one-day plans while keeping recurring intent', async () => {
+    stubFacts([
+      { fact: 'The user plans to meditate tomorrow morning', kind: 'commitment', evidence: 'I plan to meditate tomorrow morning' },
+      { fact: 'The user wants to meditate more regularly', kind: 'preference', evidence: 'I want to meditate more regularly' },
+    ]);
+    const outcome = await extractFactsFromTurnWithOutcome({
+      turnText: 'User: I plan to meditate tomorrow morning. I want to meditate more regularly.',
+      source: 'test:agent-session',
+      requireEvidence: true,
+      evidenceTexts: ['I plan to meditate tomorrow morning. I want to meditate more regularly.'],
+    });
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) expect(outcome.facts.map((fact) => fact.fact)).toEqual(['The user wants to meditate more regularly']);
+  });
   test('agent-session evidence must quote actual User words', async () => {
     stubFacts([{ fact: 'User owns a yacht', kind: 'fact', evidence: 'owns a yacht' }]);
     const rejected = await extractFactsFromTurnWithOutcome({
