@@ -99,6 +99,10 @@ export const ENTITY_HINTS_CAP = 5;
 
 export interface ExtractInput {
   turnText: string;
+  /** Require each emitted claim to cite an exact source-utterance substring. */
+  requireEvidence?: boolean;
+  /** Source utterances, excluding assistant summaries and generated metadata. */
+  evidenceTexts?: string[];
   /** Opaque session id (MCP _meta.session_id, CLI --session, or null). */
   sessionId?: string | null;
   /** Existing canonical entity slugs the agent already resolved (D4 hint). */
@@ -184,6 +188,8 @@ const EXTRACTOR_SYSTEM = [
   '',
   'Rules:',
   '- Capture user statements verbatim where possible. Do not paraphrase tone.',
+  '- Only assert what the speaker actually said. Preserve uncertainty and plans as uncertainty and plans; do not turn a hypothetical into an event.',
+  '- Do not infer a relationship, identity, or ownership from ambiguous words such as "we". Skip a claim if its subject or status is unclear.',
   '- "event": something that happened or is scheduled at a specific time.',
   '- "preference": durable taste/like/dislike (e.g. "doesn\'t drink coffee").',
   '- "commitment": a promise/agreement/decision to do something.',
@@ -312,6 +318,9 @@ export async function extractFactsFromTurnWithOutcome(
       ? ` Known entity slugs the user already mentioned: ${input.entityHints.slice(0, ENTITY_HINTS_CAP).join(', ')}.`
       : ''
   }`;
+  const system = input.requireEvidence
+    ? `${EXTRACTOR_SYSTEM}\nFor each fact include an "evidence" field copied as an exact, contiguous substring from the speaker's words, with identical punctuation, capitalization, spaces, and ellipses. Never clean up or splice a quote. The quote must explicitly support the fact on its own; include the referent when the claim uses words like "it" or "that". Omit ambiguous or unsupported claims. Do not quote the page title or metadata. This is selective PERSONAL memory: keep enduring biographical and life context, relationships, preferences, decisions, and ongoing constraints useful in a later unrelated conversation. A user-stated recurring money cap is an ongoing constraint. Skip requests to implement, test, verify, or change the current system; one-off workflow instructions; build status; agent/tool instructions; temporary configuration; and repeated restatements of the same preference. If a segment contains only task directions, return an empty facts array. Prefer one compact supported claim over several fragments of the same thought.`
+    : EXTRACTOR_SYSTEM;
   let result: ChatResult;
   // The cap the last call was actually sent at. When the truncation retry
   // escalates to maxTokens*2, the malformed-output retry below must re-send
@@ -320,7 +329,7 @@ export async function extractFactsFromTurnWithOutcome(
   try {
     result = await chat({
       model,
-      system: EXTRACTOR_SYSTEM,
+      system,
       messages: [{ role: 'user', content: userContent }],
       maxTokens,
       abortSignal: input.abortSignal,
@@ -337,7 +346,7 @@ export async function extractFactsFromTurnWithOutcome(
       effectiveMaxTokens = maxTokens * 2;
       result = await chat({
         model,
-        system: EXTRACTOR_SYSTEM,
+        system,
         messages: [{ role: 'user', content: userContent }],
         maxTokens: effectiveMaxTokens,
         abortSignal: input.abortSignal,
@@ -376,7 +385,7 @@ export async function extractFactsFromTurnWithOutcome(
     try {
       result = await chat({
         model,
-        system: `${EXTRACTOR_SYSTEM}\nThe previous attempt returned invalid JSON or an invalid facts schema. ` +
+        system: `${system}\nThe previous attempt returned invalid JSON or an invalid facts schema. ` +
           'Return exactly one valid JSON object and no prose.',
         messages: [{ role: 'user', content: userContent }],
         maxTokens: effectiveMaxTokens,
@@ -413,6 +422,7 @@ export async function extractFactsFromTurnWithOutcome(
   const parsedRaw = parsedShape.facts;
 
   const facts: ExtractedFact[] = [];
+  let invalidEvidenceCount = 0;
   for (const candidate of parsedRaw.slice(0, cap)) {
     if (input.abortSignal?.aborted) {
       const e = new Error('aborted');
@@ -421,6 +431,21 @@ export async function extractFactsFromTurnWithOutcome(
     }
     let factText = candidate.fact.trim();
     if (!factText) continue;
+    const evidence = candidate.evidence?.trim();
+    if (input.requireEvidence && (
+      !evidence || evidence.length < 8 ||
+      !input.evidenceTexts?.some((utterance) => utterance.includes(evidence))
+    )) {
+      // Never publish unsupported claims. Keep independently supported
+      // siblings; a single bad quote must not strand the entire page.
+      invalidEvidenceCount++;
+      continue;
+    }
+    const utterance = evidence && input.evidenceTexts?.find((text) => text.includes(evidence));
+    const quoteAt = utterance && evidence ? utterance.indexOf(evidence) : -1;
+    const passage = utterance && evidence && quoteAt >= 0
+      ? utterance.slice(Math.max(0, quoteAt - 160), Math.min(utterance.length, quoteAt + evidence.length + 160)).trim()
+      : undefined;
     // Sanitize on the way OUT too.
     for (const p of INJECTION_PATTERNS) factText = factText.replace(p.rx, p.replacement);
     if (factText.length > 500) factText = factText.slice(0, 497) + '...';
@@ -454,6 +479,7 @@ export async function extractFactsFromTurnWithOutcome(
 
     facts.push({
       fact: factText,
+      ...(input.requireEvidence ? { context: `Machine-extracted candidate; the fact is a paraphrase, not a direct User quote.\nDirect User source quote: ${evidence}\nSurrounding source: ${passage}` } : {}),
       kind,
       // Unknown-speaker gate: if the LLM echoed an anonymous-speaker label back
       // as the entity (self-attribution of a first-person claim from a speaker
@@ -470,6 +496,14 @@ export async function extractFactsFromTurnWithOutcome(
       claim_unit:   claimUnit,
       claim_period: claimPeriod,
     });
+  }
+
+  if (invalidEvidenceCount > 0) {
+    process.stderr.write(
+      `[facts-extract] WARN: dropped ${invalidEvidenceCount} candidate(s) without exact User evidence; ` +
+      `kept ${facts.length}\n`,
+    );
+    if (facts.length === 0) return { ok: false, reason: 'malformed_output', model };
   }
 
   return { ok: true, facts };
@@ -504,6 +538,7 @@ export async function extractFactsFromTurn(input: ExtractInput): Promise<Extract
 
 interface RawExtracted {
   fact: string;
+  evidence?: string;
   kind: string;
   entity?: string | null;
   confidence?: number;
@@ -564,6 +599,7 @@ function tryArrayShapeDetailed(s: string): ParsedExtractorShape | null {
       }
       out.push({
         fact: o.fact,
+        evidence: typeof o.evidence === 'string' ? o.evidence : undefined,
         kind: o.kind,
         entity: typeof o.entity === 'string' ? o.entity : null,
         confidence: typeof o.confidence === 'number' ? o.confidence : 1.0,

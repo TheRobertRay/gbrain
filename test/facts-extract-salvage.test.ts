@@ -35,6 +35,53 @@ async function extract() {
 }
 
 describe('facts extractor candidate salvage (#3866)', () => {
+  test('agent-session evidence must quote actual User words', async () => {
+    stubFacts([{ fact: 'User owns a yacht', kind: 'fact', evidence: 'owns a yacht' }]);
+    const rejected = await extractFactsFromTurnWithOutcome({
+      turnText: 'User: I prefer a quiet apartment',
+      source: 'test:agent-session',
+      requireEvidence: true,
+      evidenceTexts: ['I prefer a quiet apartment'],
+    });
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) expect(rejected.reason).toBe('malformed_output');
+
+    stubFacts([{ fact: 'User prefers a quiet apartment', kind: 'preference', evidence: 'I prefer a quiet apartment' }]);
+    const accepted = await extractFactsFromTurnWithOutcome({
+      turnText: 'User: I prefer a quiet apartment',
+      source: 'test:agent-session',
+      requireEvidence: true,
+      evidenceTexts: ['I prefer a quiet apartment'],
+    });
+    expect(accepted.ok).toBe(true);
+    if (accepted.ok) {
+      expect(accepted.facts[0]?.context).toContain('I prefer a quiet apartment');
+      expect(accepted.facts[0]?.context).toContain('Machine-extracted candidate');
+    }
+
+    stubFacts([{ fact: 'The rent increase occurred', kind: 'event', evidence: 'it definitely happened.' }]);
+    const contextual = await extractFactsFromTurnWithOutcome({
+      turnText: 'User: On the rent increase part, it definitely happened.',
+      source: 'test:agent-session',
+      requireEvidence: true,
+      evidenceTexts: ['On the rent increase part, it definitely happened.'],
+    });
+    expect(contextual.ok).toBe(true);
+    if (contextual.ok) expect(contextual.facts[0]?.context).toContain('rent increase part');
+
+    stubFacts([
+      { fact: 'User owns a yacht', kind: 'fact', evidence: 'owns a yacht' },
+      { fact: 'User prefers a quiet apartment', kind: 'preference', evidence: 'I prefer a quiet apartment' },
+    ]);
+    const salvaged = await extractFactsFromTurnWithOutcome({
+      turnText: 'User: I prefer a quiet apartment',
+      source: 'test:agent-session',
+      requireEvidence: true,
+      evidenceTexts: ['I prefer a quiet apartment'],
+    });
+    expect(salvaged.ok).toBe(true);
+    if (salvaged.ok) expect(salvaged.facts.map((fact) => fact.fact)).toEqual(['User prefers a quiet apartment']);
+  });
   test('keeps valid facts when another candidate is malformed', async () => {
     stubFacts([
       {

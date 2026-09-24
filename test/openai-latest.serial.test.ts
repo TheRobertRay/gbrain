@@ -80,6 +80,12 @@ describe('parseOpenAIChatId — conservative grammar', () => {
 describe('rankOpenAIChatModels — newest PRICED family, tier ladder', () => {
   const allPriced = () => true;
 
+  test('explicit-only GPT-6 Luna does not replace the global deep default', () => {
+    const { tiers } = rankOpenAIChatModels(['gpt-5.6-sol', 'gpt-5.6-luna', 'gpt-6-luna'], allPriced);
+    expect(tiers?.deep).toBe('openai:gpt-5.6-sol');
+    expect(tiers?.utility).toBe('openai:gpt-5.6-luna');
+  });
+
   test('named tiers map to the ladder (5.6 family shape)', () => {
     const { tiers } = rankOpenAIChatModels(
       ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.6', 'gpt-5.5', 'gpt-4o'],

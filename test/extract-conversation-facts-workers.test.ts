@@ -32,6 +32,7 @@ import {
   extractConversationFactsLockId,
   PER_PAGE_LOCK_TTL_MINUTES,
   _resetLockBusyLogCacheForTest,
+  buildJobParams,
 } from '../src/commands/extract-conversation-facts.ts';
 
 const REPO_ROOT = resolve(import.meta.dir, '..');
@@ -43,6 +44,13 @@ beforeEach(() => {
 });
 
 describe('extract-conversation-facts — exported helpers (T5)', () => {
+  test('background envelope carries the resolved selected slugs and one source cap', () => {
+    const slugs = ['conversations/sessions/2026-09-23-hermes-abcdef123456'];
+    expect(buildJobParams(['--source-id', 'default', '--max-cost-usd', '0.25'], slugs))
+      .toMatchObject({ sourceId: 'default', maxCostUsd: 0.25, slugs });
+    const jobs = readFileSync(resolve(REPO_ROOT, 'src/commands/jobs.ts'), 'utf8');
+    expect(jobs).toContain('slugs: Array.isArray(job.data.slugs)');
+  });
   test('extractConversationFactsLockId composes source + slug', () => {
     expect(extractConversationFactsLockId('default', 'chat/alice')).toBe(
       'extract-conversation-facts:default:chat/alice',

@@ -43,14 +43,13 @@ export interface ModelPricing {
   output: number;
   /**
    * #4218 — USD per 1M prompt-cache-READ tokens. Optional: present only for
-   * providers whose published cache pricing we've verified (Anthropic:
-   * 0.1x input). Consumers that price cache tokens fall back to the input
+   * models whose published cache pricing we've verified. Consumers that price cache tokens fall back to the input
    * rate when absent (conservative over-estimate for reads).
    */
   cache_read?: number;
   /**
    * #4218 — USD per 1M prompt-cache-WRITE tokens at the default 5-minute
-   * TTL (Anthropic: 1.25x input; the 1h TTL bills 2x and is NOT modeled —
+   * TTL (where applicable; Anthropic: 1.25x input, 1h TTL bills 2x and is NOT modeled —
    * gbrain's gateway requests the default TTL unless config overrides it,
    * so 5m is the honest best-effort rate). Fall back to input rate when
    * absent (under-estimate for writes; documented, not silent).
@@ -124,6 +123,9 @@ export const CANONICAL_PRICING: Record<string, ModelPricing> = {
   'openai:gpt-5.6-sol':                   { input:  5.00, output: 30.00 },
   'openai:gpt-5.6-terra':                 { input:  2.50, output: 15.00 },
   'openai:gpt-5.6-luna':                  { input:  1.00, output:  6.00 },
+  // OpenAI Standard, short context; verified 2026-09-22.
+  // https://developers.openai.com/api/docs/models/gpt-6-luna
+  'openai:gpt-6-luna':                    { input:  0.10, output:  0.50, cache_read: 0.01, cache_write: 0.125 },
 
   // ── Google ─────────────────────────────────────────────────────────────
   // `gemini-1.5-pro` was retired by Google (#3510); kept so historical

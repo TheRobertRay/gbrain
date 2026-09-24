@@ -128,6 +128,7 @@ test/eval-synthesize-concepts-routing.test.ts	subprocess smoke — end-to-end ro
 test/exit-classification.test.ts	consumer wire-up — helper used by all 3 sites (no inline filters left)	5	doctor-source-helper,readFileSync
 test/extract-atoms-drain.test.ts	extract-atoms-drain Minion handler retries on provider_failure (issue #3218)	2	readFileSync
 test/extract-atoms-drain.test.ts	shared wiring helper holds the cycle lock (5A)	2	readFileSync
+test/extract-conversation-facts-workers.test.ts	extract-conversation-facts — exported helpers (T5)	4	readFileSync
 test/extract-workers.test.ts	extract.ts → workers wiring (T7)	10	readFileSync
 test/features.test.ts	CLI routing	2	bun-file
 test/fence-extraction.test.ts	Layer 8 D2 — markdown fence extraction	18	readFileSync

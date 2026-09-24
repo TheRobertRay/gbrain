@@ -27,6 +27,7 @@ import {
   parseConversationMessages,
   splitIntoSegments,
   renderSegmentForExtraction,
+  cleanAgentUserEvidence,
   runExtractConversationFactsCore,
   extractConversationFactsFingerprint,
   encodeCheckpointEntry,
@@ -237,6 +238,20 @@ describe('splitIntoSegments', () => {
 // ---------------------------------------------------------------------------
 
 describe('renderSegmentForExtraction', () => {
+  test('removes machine-added transport and scheduler context from User evidence', () => {
+    expect(cleanAgentUserEvidence('Plan my day [Unified Life System transport: request_id=x]')).toBe('Plan my day');
+    expect(cleanAgentUserEvidence('[IMPORTANT: You are a scheduled cron job]')).toBe('');
+  });
+  test('native agent-session extraction excludes Assistant claims from evidence', () => {
+    const msgs = parseConversationMessages([
+      fmt('User', '2024-03-15', '9:00 AM', 'I prefer a quiet apartment'),
+      fmt('Assistant', '2024-03-15', '9:05 AM', 'You said you own a yacht'),
+    ].join('\n'));
+    const seg = splitIntoSegments(msgs)[0];
+    const text = renderSegmentForExtraction('agent session', seg, 'User');
+    expect(text).toContain('I prefer a quiet apartment');
+    expect(text).not.toContain('You said you own a yacht');
+  });
   test('prepends topical/temporal context header', () => {
     const msgs = parseConversationMessages([
       fmt('Alice Example', '2024-03-15', '9:00 AM', 'hello'),
@@ -528,6 +543,68 @@ describe('runExtractConversationFactsCore', () => {
     expect(result.pages_processed).toBe(1);
     expect(result.facts_inserted).toBe(0);
     expect(result.segments_processed).toBeGreaterThanOrEqual(1);
+  });
+
+  test('agent-session facts receive User words without Assistant summaries', async () => {
+    const slug = 'conversations/sessions/agent-example';
+    await engine.putPage(slug, {
+      type: 'conversation',
+      title: 'Agent session',
+      compiled_truth: [
+        fmt('User', '2024-03-15', '9:00 AM', 'I prefer a quiet apartment'),
+        fmt('Assistant', '2024-03-15', '9:01 AM', 'You own a yacht'),
+        fmt('User', '2024-03-15', '9:02 AM', 'I need parking'),
+        fmt('User', '2024-03-15', '9:02 AM', 'Plan my day [Unified Life System transport: request_id=x]'),
+        fmt('Assistant', '2024-03-15', '9:03 AM', 'You have a private jet'),
+      ].join('\n'),
+      timeline: '',
+      frontmatter: {},
+    });
+    const inputs: string[] = [];
+    const result = await runExtractConversationFactsCore(engine, {
+      sourceId: 'default', slug, sleepMs: 0,
+      extractor: async ({ turnText }) => { inputs.push(turnText); return []; },
+    });
+    expect(result.pages_processed).toBe(1);
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0]).toContain('I need parking');
+    expect(inputs[0]).not.toContain('You own a yacht');
+    expect(inputs[0]).not.toContain('You have a private jet');
+    expect(inputs[0]).not.toContain('request_id=x');
+  });
+
+  test('explicit slug batch processes only selected pages under one invocation', async () => {
+    const inputs: string[] = [];
+    const result = await runExtractConversationFactsCore(engine, {
+      sourceId: 'default',
+      slugs: ['conversations/imessage/alice-example', 'conversations/sessions/missing'],
+      sleepMs: 0,
+      extractor: async ({ turnText }) => { inputs.push(turnText); return []; },
+    });
+    expect(result.pages_processed).toBe(1);
+    expect(result.pages_skipped_disappeared).toBe(1);
+    expect(inputs.length).toBeGreaterThan(0);
+  });
+
+  test('assistant-only agent session cannot fall back to Assistant evidence', async () => {
+    const slug = 'conversations/sessions/assistant-only';
+    await engine.putPage(slug, {
+      type: 'conversation',
+      title: 'Assistant-only agent session',
+      compiled_truth: [
+        fmt('Assistant', '2024-03-15', '9:00 AM', 'Robert owns a yacht'),
+        fmt('Assistant', '2024-03-15', '9:01 AM', 'Robert has a private jet'),
+      ].join('\n'),
+      timeline: '',
+      frontmatter: {},
+    });
+    const inputs: string[] = [];
+    const result = await runExtractConversationFactsCore(engine, {
+      sourceId: 'default', slug, sleepMs: 0,
+      extractor: async ({ turnText }) => { inputs.push(turnText); return []; },
+    });
+    expect(result.facts_inserted).toBe(0);
+    expect(inputs).toHaveLength(0);
   });
 
   test('dry-run does not write the extract_rollup_7d cache row', async () => {
