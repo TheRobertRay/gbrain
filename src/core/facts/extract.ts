@@ -422,6 +422,7 @@ export async function extractFactsFromTurnWithOutcome(
   const parsedRaw = parsedShape.facts;
 
   const facts: ExtractedFact[] = [];
+  let invalidEvidenceCount = 0;
   for (const candidate of parsedRaw.slice(0, cap)) {
     if (input.abortSignal?.aborted) {
       const e = new Error('aborted');
@@ -435,9 +436,10 @@ export async function extractFactsFromTurnWithOutcome(
       !evidence || evidence.length < 8 ||
       !input.evidenceTexts?.some((utterance) => utterance.includes(evidence))
     )) {
-      // Fail the segment rather than writing a partial or unsupported fact
-      // and falsely recording this conversation page as complete.
-      return { ok: false, reason: 'malformed_output', model };
+      // Never publish unsupported claims. Keep independently supported
+      // siblings; a single bad quote must not strand the entire page.
+      invalidEvidenceCount++;
+      continue;
     }
     const utterance = evidence && input.evidenceTexts?.find((text) => text.includes(evidence));
     const quoteAt = utterance && evidence ? utterance.indexOf(evidence) : -1;
@@ -477,7 +479,7 @@ export async function extractFactsFromTurnWithOutcome(
 
     facts.push({
       fact: factText,
-      ...(input.requireEvidence ? { context: `Direct source quote: ${evidence}\nSurrounding source: ${passage}` } : {}),
+      ...(input.requireEvidence ? { context: `Machine-extracted candidate; the fact is a paraphrase, not a direct User quote.\nDirect User source quote: ${evidence}\nSurrounding source: ${passage}` } : {}),
       kind,
       // Unknown-speaker gate: if the LLM echoed an anonymous-speaker label back
       // as the entity (self-attribution of a first-person claim from a speaker
@@ -494,6 +496,14 @@ export async function extractFactsFromTurnWithOutcome(
       claim_unit:   claimUnit,
       claim_period: claimPeriod,
     });
+  }
+
+  if (invalidEvidenceCount > 0) {
+    process.stderr.write(
+      `[facts-extract] WARN: dropped ${invalidEvidenceCount} candidate(s) without exact User evidence; ` +
+      `kept ${facts.length}\n`,
+    );
+    if (facts.length === 0) return { ok: false, reason: 'malformed_output', model };
   }
 
   return { ok: true, facts };
