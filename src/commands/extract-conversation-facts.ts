@@ -83,6 +83,7 @@ import {
 import { createProgress } from '../core/progress.ts';
 import { getCliOptions, cliOptsToProgressOptions, maybeBackground } from '../core/cli-options.ts';
 import { createHash } from 'crypto';
+import { readFileSync } from 'node:fs';
 // v0.41.15.0 (T5): worker-pool primitive + per-source-clamp wrapper +
 // per-page advisory lock + delete-orphans-first replay safety. See plan
 // `~/.claude/plans/system-instruction-you-are-working-fancy-creek.md`
@@ -502,6 +503,16 @@ export function renderSegmentForExtraction(
   // extractor still sees the topical anchor.
   const slack = SEGMENT_TEXT_CHAR_LIMIT - header.length - 16;
   return `${header}\n${body.slice(0, Math.max(0, slack))}\n…(truncated)`;
+}
+
+/** Transport and scheduler annotations are not the human's evidence. */
+export function cleanAgentUserEvidence(text: string): string {
+  let end = text.length;
+  for (const marker of ['[Unified Life System transport:', '[IMPORTANT:']) {
+    const at = text.indexOf(marker);
+    if (at >= 0 && at < end) end = at;
+  }
+  return text.slice(0, end).trim();
 }
 
 // ---------------------------------------------------------------------------
@@ -1063,12 +1074,22 @@ async function processPage(
     if (state.segmentLimit > 0 && segmentsThisPage >= state.segmentLimit) break;
     if (state.signal?.aborted) throw new Error('aborted');
 
-    if (userOnly && !seg.messages.some((m) => m.speaker === 'User')) {
+    const evidenceMessages = userOnly
+      ? seg.messages
+          .filter((m) => m.speaker === 'User')
+          .map((m) => ({ ...m, text: cleanAgentUserEvidence(m.text) }))
+          .filter((m) => m.text.length > 0)
+      : seg.messages;
+    if (userOnly && evidenceMessages.length === 0) {
       newestEnd = seg.endIso;
       continue;
     }
 
-    const text = renderSegmentForExtraction(page.title || page.slug, seg, userOnly ? 'User' : undefined);
+    const text = renderSegmentForExtraction(
+      page.title || page.slug,
+      { ...seg, messages: evidenceMessages },
+      userOnly ? 'User' : undefined,
+    );
     const sessionId = `${PER_SEGMENT_SOURCE_PREFIX}:${page.slug}`;
 
     // BrainBench (decision 15) may inject a deterministic extractor; when it
@@ -1089,7 +1110,7 @@ async function processPage(
       const extraction = await extractFactsFromTurnWithOutcome({
         turnText: text,
         requireEvidence: userOnly,
-        evidenceTexts: userOnly ? seg.messages.filter((m) => m.speaker === 'User').map((m) => m.text) : undefined,
+        evidenceTexts: userOnly ? evidenceMessages.map((m) => m.text) : undefined,
         sessionId,
         source: PER_SEGMENT_SOURCE_PREFIX,
         engine: state.engine,
@@ -1709,6 +1730,8 @@ interface ParsedArgs {
   sourceId?: string;
   types?: AllowedType[];
   slug?: string;
+  slugsFile?: string;
+  json?: boolean;
   dryRun?: boolean;
   limit?: number;
   sinceIso?: string;
@@ -1730,10 +1753,12 @@ function parseArgs(args: string[]): ParsedArgs {
     const a = args[i];
     if (a === '--help' || a === '-h') { out.help = true; continue; }
     if (a === '--dry-run') { out.dryRun = true; continue; }
+    if (a === '--json') { out.json = true; continue; }
     if (a === '--force') { out.force = true; continue; }
     if (a === '--yes' || a === '-y') { out.yes = true; continue; }
     if (a === '--override-disabled') { out.overrideDisabled = true; continue; }
     if (a === '--slug') { out.slug = args[++i]; continue; }
+    if (a === '--slugs-file') { out.slugsFile = args[++i]; continue; }
     if (a === '--source-id') { out.sourceId = args[++i]; continue; }
     if (a === '--since') { out.sinceIso = args[++i]; continue; }
     if (a === '--types') {
@@ -1787,6 +1812,7 @@ function parseArgs(args: string[]): ParsedArgs {
       out.error = `Invalid --since: ${out.sinceIso}`;
     }
   }
+  if (out.slug && out.slugsFile) out.error = '--slug and --slugs-file are mutually exclusive';
   return out;
 }
 
@@ -1805,6 +1831,7 @@ Options:
                          Default: reads cycle.conversation_facts_backfill.types config
                          (falls back to the full allowlist).
   --slug <slug>          Process a single page (overrides multi-page enumeration).
+  --slugs-file <path>    Process only slugs listed one per line in a trusted local file.
   --dry-run              Show segmentation + counts; no DB writes, no checkpoint advance.
   --limit <N>            Cap pages processed (default: all).
   --since <iso>          Only consider messages newer than this ISO timestamp.
@@ -1825,6 +1852,7 @@ Options:
   --background           Submit as a Minion job; print job_id; exit (use 'gbrain jobs follow').
   --yes                  Auto-confirm cost preview in non-TTY contexts.
   --help, -h             Show this help.
+  --json                 Append a machine-readable result with exact spend.
 
 Multi-source: when --source-id is omitted, the command iterates ALL
 sources from gbrain sources list. Per-source budget cap defaults to
@@ -1883,6 +1911,20 @@ export async function runExtractConversationFacts(
     console.error(HELP);
     process.exit(1);
   }
+  let selectedSlugs: string[] | undefined;
+  if (parsed.slugsFile !== undefined) {
+    try {
+      selectedSlugs = [...new Set(readFileSync(parsed.slugsFile, 'utf8')
+        .split(/\r?\n/).map((slug) => slug.trim()).filter(Boolean))];
+    } catch (err) {
+      console.error(`Cannot read --slugs-file: ${(err as Error).message}`);
+      process.exit(1);
+    }
+    if (selectedSlugs.length > 1000) {
+      console.error('--slugs-file exceeds the 1000-page batch limit');
+      process.exit(1);
+    }
+  }
 
   // Chat gateway is required for non-dry-run. Recover a cold singleton before
   // reporting an availability error (#2590).
@@ -1935,6 +1977,7 @@ export async function runExtractConversationFacts(
         sourceId,
         types: parsed.types,
         slug: parsed.slug,
+        slugs: selectedSlugs,
         dryRun: parsed.dryRun,
         limit: parsed.limit,
         sinceIso: parsed.sinceIso,
@@ -2014,6 +2057,14 @@ export async function runExtractConversationFacts(
   }
   if (anyBudgetExhausted) {
     console.log(`  Budget cap reached. Re-run with a higher --max-cost-usd to continue.`);
+  }
+  if (parsed.json) {
+    console.log(JSON.stringify({
+      ...aggregate,
+      spent_usd: totalSpent,
+      budget_exhausted: anyBudgetExhausted,
+      source_count: sourceIds.length,
+    }));
   }
 
   // v0.41.15.0 (codex #3): exit 3 when pages were skipped due to

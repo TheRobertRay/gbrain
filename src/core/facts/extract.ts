@@ -319,7 +319,7 @@ export async function extractFactsFromTurnWithOutcome(
       : ''
   }`;
   const system = input.requireEvidence
-    ? `${EXTRACTOR_SYSTEM}\nFor each fact include an "evidence" field copied as an exact, contiguous substring from the speaker's words, with identical punctuation, capitalization, spaces, and ellipses. Never clean up or splice a quote. The quote must explicitly support the fact on its own; omit ambiguous or unsupported claims. Do not quote the page title or metadata.`
+    ? `${EXTRACTOR_SYSTEM}\nFor each fact include an "evidence" field copied as an exact, contiguous substring from the speaker's words, with identical punctuation, capitalization, spaces, and ellipses. Never clean up or splice a quote. The quote must explicitly support the fact on its own; include the referent when the claim uses words like "it" or "that". Omit ambiguous or unsupported claims. Do not quote the page title or metadata. Agent sessions may contain test prompts, tool instructions, build status, and temporary configuration; those are not durable personal facts and should be skipped.`
     : EXTRACTOR_SYSTEM;
   let result: ChatResult;
   // The cap the last call was actually sent at. When the truncation retry
