@@ -105,6 +105,10 @@ describe('#2185 acceptance — real usage stays legal', () => {
     expect(validateCommandFlags('serve', ['--print-admin-token'])).toBeNull();
     expect(validateCommandFlags('embed', ['--stale', '--pace'])).toBeNull();
     expect(validateCommandFlags('sync', ['--full'])).toBeNull();
+    expect(validateCommandFlags('extract-conversation-facts', [
+      '--source-id', 'default', '--slugs-file', '/tmp/selected-pages',
+      '--max-cost-usd', '0.25', '--json',
+    ])).toBeNull();
   });
 
   test('scope flags require direct consumption on upgrade surfaces', () => {
