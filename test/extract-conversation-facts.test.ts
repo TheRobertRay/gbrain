@@ -170,6 +170,13 @@ test('parses a markdown-heading turn body (## User / ## Assistant)', () => {
 // ---------------------------------------------------------------------------
 
 describe('splitIntoSegments', () => {
+  test('one User message is eligible only when the agent-session caller opts in', () => {
+    const messages = parseConversationMessages('**User** (2026-09-23 12:05 AM): I want to keep legitimate late-night building possible.');
+    expect(splitIntoSegments(messages)).toEqual([]);
+    const segments = splitIntoSegments(messages, { minMessages: 1 });
+    expect(segments).toHaveLength(1);
+    expect(segments[0]?.messages[0]?.speaker).toBe('User');
+  });
   test('cuts on time gap larger than gapMinutes', () => {
     const msgs = parseConversationMessages([
       fmt('Alice Example', '2024-03-15', '9:00 AM', 'a'),
