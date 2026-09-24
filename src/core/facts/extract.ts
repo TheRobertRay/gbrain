@@ -229,6 +229,7 @@ const EXTRACTOR_SYSTEM = [
 ].join('\n');
 
 const MAX_TURN_TEXT_CHARS = 8000;
+const SHORT_LIVED_AGENT_PLAN = /\b(?:today|tomorrow|tonight|this (?:morning|afternoon|evening|week)|next (?:week|month))\b/i;
 
 export type ExtractFailureReason =
   | 'chat_unavailable'
@@ -319,7 +320,7 @@ export async function extractFactsFromTurnWithOutcome(
       : ''
   }`;
   const system = input.requireEvidence
-    ? `${EXTRACTOR_SYSTEM}\nFor each fact include an "evidence" field copied as an exact, contiguous substring from the speaker's words, with identical punctuation, capitalization, spaces, and ellipses. Never clean up or splice a quote. The quote must explicitly support the fact on its own; include the referent when the claim uses words like "it" or "that". Omit ambiguous or unsupported claims. Do not quote the page title or metadata. This is selective PERSONAL memory: keep enduring biographical and life context, relationships, preferences, decisions, and ongoing constraints useful in a later unrelated conversation. A user-stated recurring money cap is an ongoing constraint. Skip requests to implement, test, verify, or change the current system; one-off workflow instructions; build status; agent/tool instructions; temporary configuration; and repeated restatements of the same preference. If a segment contains only task directions, return an empty facts array. Prefer one compact supported claim over several fragments of the same thought.`
+    ? `${EXTRACTOR_SYSTEM}\nFor each fact include an "evidence" field copied as an exact, contiguous substring from the speaker's words, with identical punctuation, capitalization, spaces, and ellipses. Never clean up or splice a quote. The quote must explicitly support the fact on its own; include the referent when the claim uses words like "it" or "that". Omit ambiguous or unsupported claims. Do not quote the page title or metadata. This is selective PERSONAL memory: keep enduring biographical and life context, relationships, preferences, decisions, and ongoing constraints useful in a later unrelated conversation. A user-stated recurring money cap is an ongoing constraint. Skip requests to implement, test, verify, or change the current system; one-off workflow instructions; build status; agent/tool instructions; temporary configuration; and repeated restatements of the same preference. Do not store one-day plans or reminders (for example, buying a bike today or meditating for 20 minutes tomorrow); a recurring goal to meditate may be kept. If a segment contains only task directions, return an empty facts array. Prefer one compact supported claim over several fragments of the same thought.`
     : EXTRACTOR_SYSTEM;
   let result: ChatResult;
   // The cap the last call was actually sent at. When the truncation retry
@@ -431,6 +432,8 @@ export async function extractFactsFromTurnWithOutcome(
     }
     let factText = candidate.fact.trim();
     if (!factText) continue;
+    // Relative-day plans are unsafe as durable agent memory after the day passes.
+    if (input.requireEvidence && SHORT_LIVED_AGENT_PLAN.test(factText)) continue;
     const evidence = candidate.evidence?.trim();
     if (input.requireEvidence && (
       !evidence || evidence.length < 8 ||
